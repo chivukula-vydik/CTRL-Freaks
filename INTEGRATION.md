@@ -103,7 +103,6 @@ quote is not in the doc, coerces types (`12.5 lakh` -> 1250000, `3rd March 1990`
 - API: `POST /extract` multipart `files` (many), optional `fields_json` form field
 - Eval: `python eval/run_extract.py --label x` -> field accuracy, doc exact match, per-field accuracy,
   failures, and the output rows as `eval/reports/extract_x.csv`
-- Sample pack (placeholder fields, shows the format only): `examples/extract/data/extract/` (`--dir` it)
 - Cross-field checks (field A = B + C, etc.) go after `extract_file()` in the caller
 
 ## If the problem is a data pipeline + analytics over CSVs
@@ -125,12 +124,11 @@ tokens, number/date parsing, enum to canonical spelling, defaults) -> rejected r
 + reasons (bad type, required missing, rule broken, duplicate key) and exact duplicates dropped ->
 data-quality report per table (counts, nulls, fills, rejections by column, orphan join keys) ->
 `calc()`, the one calculation tool -> `ask()` picks metric (words, else LLM from the closed list),
-filters (enum/filterable values named in the question), "by <column>" grouping, dates (ISO, YYYY-MM,
-"in 2024") by code. The LLM never does maths; `MOCK_LLM=true` runs everything.
+filters (enum/filterable values named in the question), "by <column>" grouping, time buckets
+("monthly", "by quarter"), ranking ("top 5 <column>", "lowest"), dates (ISO, YYYY-MM, Q1 2024, "in 2024") by code. The LLM never does maths; `MOCK_LLM=true` runs everything.
 
 - API: `POST /admin/pipeline/upload` (`<table>.csv` files, admin key, returns DQ report),
-  `GET /pipeline/report`, `GET /pipeline/metrics`, `POST /pipeline/calc` `{"metric","filters"?,"group_by"?,
-  "date_from"?,"date_to"?}`, `POST /pipeline/ask` `{"question"}`
+  `GET /pipeline/report`, `GET /pipeline/metrics`, `POST /pipeline/calc` `{"metric","filters"?,"group_by"? (col or date_col:month|quarter|year),
+  "date_from"?,"date_to"?,"top"?,"bottom"?}`, `POST /pipeline/ask` `{"question"}`
 - Eval: `python eval/run_pipeline.py --label x` -> calc accuracy, DQ accuracy, rejected rows CSV
-- Sample pack (placeholder tables, shows the format only): `examples/pipeline/data/` (`--dir` it)
 - A calculation the ops can't express: add a function next to `calc()` and call it from the endpoint

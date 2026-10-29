@@ -122,7 +122,8 @@ def pipeline_calc(req: CalcRequest):
     schema, res = _pipeline()
     if req.metric not in schema["metrics"]:
         raise HTTPException(404, f"unknown metric; available: {list(schema['metrics'])}")
-    return pipeline.calc(schema, res["tables"], req.metric, req.filters, req.group_by, req.date_from, req.date_to)
+    return pipeline.calc(schema, res["tables"], req.metric, req.filters, req.group_by, req.date_from, req.date_to,
+                         req.top, req.bottom)
 
 
 @app.post("/pipeline/ask")

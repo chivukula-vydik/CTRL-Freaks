@@ -1,7 +1,7 @@
 """Pipeline eval: clean the CSVs, then score answers and data-quality numbers against expected.jsonl.
 
   python eval/run_pipeline.py --label mock                     # active DOMAIN's <pack>/pipeline/
-  python eval/run_pipeline.py --dir examples/pipeline/data --label x
+  python eval/run_pipeline.py --dir data/<name> --label x
 
 expected.jsonl lines (tol = absolute tolerance, default 0.01):
   {"id": "Q1", "question": "...", "expected": 123.4}              number, or {"group": number}

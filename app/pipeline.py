@@ -16,7 +16,10 @@ schema (<pack>/pipeline/schema.json), no code:
                 "date_column": "<col>", "label": "Text for the answer", "words": ["regex", ...],
                 "decimals": 2},
      "<ratio>": {"op": "ratio", "numerator": "<metric>", "denominator": "<metric>", "scale": 100}}}
+  # a ratio grouped by a joined column needs that same join on both parts
 
+Questions understood by code: filters (enum/filterable values named), "by <column>", "monthly/by quarter",
+"top 5 <column>"/"lowest", dates (2024-03-05, 2024-03, Q1 2024, "in 2024").
 Code makes every number. The LLM only picks a metric name from the closed list when `words` don't.
 """
 import csv
@@ -127,16 +130,37 @@ def _hit(v, want) -> bool:
     return any(_norm(v) == _norm(w) for w in (want if isinstance(want, list) else [want])) if v is not None else False
 
 
+def _group_key(r: dict, group_by: str):
+    """'col' or 'date_col:day|month|quarter|year' (ISO dates, so keys sort in time order)."""
+    col, _, period = group_by.partition(":")
+    v = r.get(col)
+    if not period or not v:
+        return v
+    if period == "quarter":
+        return f"{v[:4]}-Q{(int(v[5:7]) - 1) // 3 + 1}"
+    return v[:{"year": 4, "month": 7, "day": 10}[period]]
+
+
+def _rank(val, top: int | None, bottom: int | None):
+    if not isinstance(val, dict) or not (top or bottom):
+        return val
+    items = sorted(((g, x) for g, x in val.items() if x is not None), key=lambda kv: kv[1], reverse=bool(top))
+    return dict(items[:top or bottom])
+
+
 def calc(schema: dict, data: dict, metric: str, filters: dict | None = None, group_by: str | None = None,
-         date_from: str | None = None, date_to: str | None = None) -> dict:
-    """The one calculation tool. Same inputs -> same number. Returns value (or {group: value}) + what was used."""
+         date_from: str | None = None, date_to: str | None = None, top: int | None = None,
+         bottom: int | None = None) -> dict:
+    """The one calculation tool. Same inputs -> same number. Returns value (or {group: value}) + what was used.
+    group_by 'date_col:month' etc. buckets by time; top/bottom N keeps the N highest/lowest groups."""
     m = schema["metrics"][metric]
     dec = m.get("decimals", 2)
     if m["op"] == "ratio":
         a, b = (calc(schema, data, m[k], filters, group_by, date_from, date_to) for k in ("numerator", "denominator"))
         div = lambda x, y: round(x / y * m.get("scale", 1), dec) if x is not None and y else None  # noqa: E731
         val = ({g: div(a["value"].get(g), y) for g, y in b["value"].items()} if group_by else div(a["value"], b["value"]))
-        return {"metric": metric, "value": val, "numerator": a, "denominator": b, "group_by": group_by}
+        return {"metric": metric, "value": _rank(val, top, bottom), "numerator": a, "denominator": b,
+                "group_by": group_by, "top": top, "bottom": bottom}
     rows = data[m["table"]]
     for jt, jk in m.get("join", {}).items():
         idx = {r[jk]: r for r in data[jt]}
@@ -159,12 +183,13 @@ def calc(schema: dict, data: dict, metric: str, filters: dict | None = None, gro
     if group_by:
         groups: dict = {}
         for r in rows:
-            groups.setdefault(r.get(group_by), []).append(r)
-        val = {str(g): agg(rs) for g, rs in sorted(groups.items(), key=lambda x: str(x[0]))}
+            groups.setdefault(_group_key(r, group_by), []).append(r)
+        val = _rank({str(g): agg(rs) for g, rs in sorted(groups.items(), key=lambda x: str(x[0]))}, top, bottom)
     else:
         val = agg(rows)
     return {"metric": metric, "value": val, "op": m["op"], "column": m.get("column"), "filters": where,
-            "group_by": group_by, "date_from": date_from, "date_to": date_to, "rows_used": len(rows)}
+            "group_by": group_by, "top": top, "bottom": bottom, "date_from": date_from, "date_to": date_to,
+            "rows_used": len(rows)}
 
 
 def _tables_of(schema: dict, metric: str) -> list[str]:
@@ -172,6 +197,25 @@ def _tables_of(schema: dict, metric: str) -> list[str]:
     if m["op"] == "ratio":
         return _tables_of(schema, m["numerator"]) + _tables_of(schema, m["denominator"])
     return [m["table"], *m.get("join", {})]
+
+
+def _date_col(schema: dict, metric: str) -> str | None:
+    m = schema["metrics"][metric]
+    return _date_col(schema, m["numerator"]) if m["op"] == "ratio" else m.get("date_column")
+
+
+def _fixed(schema: dict, metric: str) -> dict:
+    """Column values a metric's own `where` already pins, across a ratio's parts."""
+    m = schema["metrics"][metric]
+    if m["op"] == "ratio":
+        return {**_fixed(schema, m["denominator"]), **_fixed(schema, m["numerator"])}
+    return {c: {_norm(x) for x in (w if isinstance(w, list) else [w])} for c, w in m.get("where", {}).items()}
+
+
+def _col_re(c: str) -> str:
+    """'group_name' matches 'group name', 'group_name', 'group', 'groups'."""
+    base = re.sub(r"_(id|name|code|no)$", "", c)
+    return rf"(?:{c.replace('_', '[ _]')}|{base.replace('_', '[ _]')}s?)"
 
 
 def pick_metric(schema: dict, question: str) -> str | None:
@@ -196,21 +240,45 @@ def ask(schema: dict, data: dict, question: str) -> dict:
                 "answer_type": "not_found", "calculation": None}
     tables = _tables_of(schema, metric)
     cols = {c: s for t in tables for c, s in schema["tables"][t]["columns"].items()}
-    filters = {}
+    filters, fixed = {}, _fixed(schema, metric)
     for c, s in cols.items():
         if "enum" in s or s.get("filterable"):
             vals = s.get("enum") or {r.get(c) for t in tables for r in data[t] if r.get(c)}
-            hits = [v for v in vals if len(str(v)) > 1 and re.search(rf"\b{re.escape(str(v))}\b", question, re.I)]
+            # "done rate": 'done' names the metric, it is not an extra filter
+            hits = [v for v in vals if len(str(v)) > 1 and _norm(v) not in fixed.get(c, set())
+                    and re.search(rf"\b{re.escape(str(v))}\b", question, re.I)]
             if hits:
                 filters[c] = hits if len(hits) > 1 else hits[0]
-    group_by = next((c for c in cols if re.search(rf"\b(?:by|per|each|every)\s+{c.replace('_', '[ _]')}\b",
-                                                  question, re.I)), None)
+    measure = schema["metrics"][metric].get("column")
+    groupable = [c for c, s in cols.items() if s.get("type", "str") == "str" and c != measure]
+    group_by = next((c for c in groupable if re.search(rf"\b(?:by|per|each|every)\s+{_col_re(c)}\b",
+                                                       question, re.I)), None)
+    dcol = _date_col(schema, metric)
+    period = re.search(r"\b(?:(daily|monthly|quarterly|yearly|annually)|(?:by|per|each|every)\s+"
+                       r"(day|month|quarter|year))\b", question, re.I)
+    if not group_by and dcol and period:
+        p = (period[1] or period[2]).lower()
+        group_by = f"{dcol}:" + {"daily": "day", "monthly": "month", "quarterly": "quarter"}.get(
+            p, "year" if p in {"yearly", "annually"} else p)
+    rank = re.search(r"\b(top|highest|most|largest|best|bottom|lowest|least|smallest|worst)\b(?:\s+(\d+))?",
+                     question, re.I)
+    top = bottom = None
+    if rank:
+        group_by = group_by or next((c for c in groupable if re.search(rf"\b{_col_re(c)}\b", question, re.I)), None)
+        if group_by:   # "top 3 groups" ranks groups; "highest" with nothing to rank is ignored
+            n = int(rank[2] or 1)
+            top, bottom = (n, None) if rank[1].lower() in {"top", "highest", "most", "largest", "best"} else (None, n)
     filters.pop(group_by, None)
     dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", question)
     month = re.search(r"\b(\d{4})-(\d{2})\b(?!-)", question)
+    quarter = re.search(r"\bQ([1-4])\s*[- ]?\s*(\d{4})\b|\b(\d{4})\s*[- ]?\s*Q([1-4])\b", question, re.I)
     year = re.search(r"\b(?:in|for|during|of)\s+(\d{4})\b", question, re.I)
     d_from = d_to = None
-    if len(dates) >= 2:
+    if quarter:
+        q, y = int(quarter[1] or quarter[4]), int(quarter[2] or quarter[3])
+        last = monthrange(y, q * 3)[1]
+        d_from, d_to = f"{y}-{q * 3 - 2:02d}-01", f"{y}-{q * 3:02d}-{last:02d}"
+    elif len(dates) >= 2:
         d_from, d_to = sorted(dates[:2])
     elif dates:
         d_from = d_to = dates[0]
@@ -219,7 +287,7 @@ def ask(schema: dict, data: dict, question: str) -> dict:
         d_from, d_to = f"{month[1]}-{month[2]}-01", f"{month[1]}-{month[2]}-{last:02d}"
     elif year:
         d_from, d_to = f"{year[1]}-01-01", f"{year[1]}-12-31"
-    res = calc(schema, data, metric, filters, group_by, d_from, d_to)
+    res = calc(schema, data, metric, filters, group_by, d_from, d_to, top, bottom)
     label = schema["metrics"][metric].get("label", metric)
     v = res["value"]
     if v is None or v == {}:

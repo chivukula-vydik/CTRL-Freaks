@@ -31,6 +31,8 @@ class CalcRequest(BaseModel):
     group_by: str | None = None
     date_from: str | None = None
     date_to: str | None = None
+    top: int | None = Field(default=None, ge=1)
+    bottom: int | None = Field(default=None, ge=1)
 
 
 class Citation(BaseModel):

@@ -1,7 +1,7 @@
 """Extraction eval: run every doc through app/extract.py, score field values against expected rows.
 
   python eval/run_extract.py --label mock                      # active DOMAIN's <pack>/extract/
-  python eval/run_extract.py --dir examples/extract/data/extract --label gemini
+  python eval/run_extract.py --dir data/<name>/extract --label gemini
 
 Folder: schema.json, docs/, expected.jsonl ({"doc": "<file name>", "<field>": <value>, ...}).
 Writes eval/reports/extract_<label>.json and the output rows as extract_<label>.csv.
