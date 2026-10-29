@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 from app.config import ROOT
-from app.domain.base import Ctx, Domain, ToolResult, Understanding, tool  # noqa: F401
+from app.domain.base import COMMON_OUT_OF_SCOPE, Ctx, Domain, ToolResult, Understanding, action, tool  # noqa: F401
 
 NAME = os.getenv("DOMAIN", "generic")
 

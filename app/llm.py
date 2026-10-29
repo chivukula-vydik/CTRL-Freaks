@@ -13,28 +13,44 @@ from app import config
 
 # per-request usage counters (read by audit)
 _usage: ContextVar[dict] = ContextVar("llm_usage")
+_ERRS = {"llm_errors": 0, "rate_limited": 0, "embed_errors": 0}
+# ponytail: per-process totals for /health; on Vercel each instance counts its own. Move to the DB if that matters
+_totals = {**_ERRS, "last_error": None}
 
 
 def reset_usage() -> None:
-    _usage.set({"llm_calls": 0, "tokens": 0, "model": "mock" if config.MOCK_LLM else config.LLM_MODEL})
+    _usage.set({"llm_calls": 0, "tokens": 0, "model": "mock" if config.MOCK_LLM else config.LLM_MODEL, **_ERRS})
 
 
 def usage() -> dict:
     try:
         return dict(_usage.get())
     except LookupError:
-        return {"llm_calls": 0, "tokens": 0, "model": "none"}
+        return {"llm_calls": 0, "tokens": 0, "model": "none", **_ERRS}
+
+
+def _cur() -> dict:
+    try:
+        return _usage.get()
+    except LookupError:
+        reset_usage()
+        return _usage.get()
 
 
 def _add(tokens: int, model: str) -> None:
-    try:
-        u = _usage.get()
-    except LookupError:
-        reset_usage()
-        u = _usage.get()
+    u = _cur()
     u["llm_calls"] += 1
     u["tokens"] += tokens
     u["model"] = model
+
+
+def _fail(kind: str, e: Exception) -> None:
+    """Count a failed call so a deterministic fallback never looks like a working model."""
+    limited = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
+    for d in (_cur(), _totals):
+        d[kind] += 1
+        d["rate_limited"] += limited
+    _totals["last_error"] = f"{kind}: {'429' if limited else type(e).__name__}"
 
 
 def _headers() -> dict:
@@ -59,14 +75,19 @@ def chat(system: str, user: str, as_json: bool = False, temperature: float = 0.0
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     try:
         return _api(msgs, as_json, temperature)
-    except Exception:
+    except Exception as e:
+        _fail("llm_errors", e)
         return None  # every caller has a deterministic fallback
 
 
 def embed(texts: list[str]) -> list[list[float]]:
-    r = httpx.post(f"{config.LLM_BASE_URL}/embeddings", json={"model": config.EMBED_MODEL, "input": texts},
-                   timeout=config.LLM_TIMEOUT, headers=_headers())
-    r.raise_for_status()
+    try:
+        r = httpx.post(f"{config.LLM_BASE_URL}/embeddings", json={"model": config.EMBED_MODEL, "input": texts},
+                       timeout=config.LLM_TIMEOUT, headers=_headers())
+        r.raise_for_status()
+    except Exception as e:
+        _fail("embed_errors", e)
+        raise
     return [x["embedding"] for x in r.json()["data"]]  # input order; Gemini omits "index"
 
 
@@ -89,13 +110,13 @@ def chat_json(system: str, user: str, required: list[str] | None = None, retries
 
 def health() -> dict:
     if config.MOCK_LLM:
-        return {"status": "mock"}
+        return {"status": "mock", **_totals}
     if not config.LLM_API_KEY:
-        return {"status": "no_api_key"}
+        return {"status": "no_api_key", **_totals}
     t = time.time()
     try:
         r = httpx.get(f"{config.LLM_BASE_URL}/models", timeout=5, headers=_headers())
         r.raise_for_status()
-        return {"status": "ok", "model": config.LLM_MODEL, "ms": int((time.time() - t) * 1000)}
+        return {"status": "ok", "model": config.LLM_MODEL, "ms": int((time.time() - t) * 1000), **_totals}
     except Exception as e:
-        return {"status": "down", "error": type(e).__name__}
+        return {"status": "down", "error": type(e).__name__, **_totals}

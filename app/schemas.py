@@ -13,14 +13,13 @@ class AnswerType(str, Enum):
     clarification_needed = "clarification_needed"
     refused = "refused"
     conflict_flagged = "conflict_flagged"
-
-
-NOT_FOUND_MSG = "I could not find this information in the authorised sources."
+    action_completed = "action_completed"
 
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     as_of_date: date | None = None
+    confirm_action_id: str | None = None  # confirms a pending action from an earlier answer
 
 
 
@@ -42,6 +41,7 @@ class Citation(BaseModel):
     page: int | None = None
     version: str | None = None
     effective_from: str | None = None
+    system: str | None = None  # set when the source is a live system (Domain.SYSTEM_NAME), not a document
 
 
 class ToolCall(BaseModel):

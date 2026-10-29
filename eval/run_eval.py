@@ -73,7 +73,7 @@ def main():
     ap.add_argument("--set", type=Path, help="eval set (default: <pack>/eval_set.jsonl)")
     ap.add_argument("--base-url")
     ap.add_argument("--label", default="run")
-    ap.add_argument("--admin-key", default=os.getenv("ADMIN_KEY", "admin-dev-key"))
+    ap.add_argument("--admin-key", default=os.getenv("ADMIN_KEY"))
     a = ap.parse_args()
     if a.pack:
         os.environ["PACK_DIR"] = str(a.pack)

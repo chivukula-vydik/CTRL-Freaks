@@ -7,6 +7,7 @@ os.environ["DATABASE_URL"] = os.getenv("TEST_DATABASE_URL", "postgresql://postgr
 os.environ["QDRANT_URL"] = ":memory:"
 os.environ.setdefault("EMBED_BACKEND", "hash")
 os.environ.setdefault("MOCK_LLM", "true")
+os.environ["ADMIN_KEY"] = "test-admin-key"
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 

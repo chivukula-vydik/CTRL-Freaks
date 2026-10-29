@@ -41,6 +41,19 @@ CREATE TABLE IF NOT EXISTS audit_log (
   record      TEXT NOT NULL
 );
 
+-- state-changing tool calls (@action). payload = what is needed to run it again on confirm
+CREATE TABLE IF NOT EXISTS actions (
+  action_id  TEXT PRIMARY KEY,
+  subject_id TEXT NOT NULL,
+  tool       TEXT NOT NULL,
+  risk       TEXT NOT NULL,
+  status     TEXT NOT NULL CHECK (status IN ('pending','done','pending_approval')),
+  payload    TEXT NOT NULL,
+  result     TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+
 -- raw CSVs uploaded for the data pipeline (app/pipeline.py); cleaned on read, so re-upload = re-clean
 CREATE TABLE IF NOT EXISTS pipeline_files (
   table_name  TEXT PRIMARY KEY,

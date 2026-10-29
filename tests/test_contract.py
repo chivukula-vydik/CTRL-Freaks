@@ -81,7 +81,7 @@ def test_unofficial_injection_not_obeyed(client, corpus):
 def test_audit_owner_and_admin(client, corpus):
     r = ask(client, "What is the quillmark card replacement fee?")
     assert client.get(f"/audit/{r['trace_id']}").status_code == 200
-    rec = client.get(f"/audit/{r['trace_id']}", headers={"X-Admin-Key": "admin-dev-key"}).json()
+    rec = client.get(f"/audit/{r['trace_id']}", headers={"X-Admin-Key": "test-admin-key"}).json()
     assert {"sources_retrieved", "tools_invoked", "model", "latency_ms", "tokens"} <= set(rec)
     assert client.get("/audit/doesnotexist").status_code == 404
 

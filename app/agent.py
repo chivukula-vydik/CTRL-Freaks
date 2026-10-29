@@ -2,7 +2,8 @@ r"""LangGraph workflow. Fixed graph, not a free-roaming agent: every hop is expl
 
 guard -> personal (domain tools) -> retrieve -> compose -> audit
       \-> retrieve ------------------------------^
-      \-> compose (refused / clarification) -----^
+      \-> confirm (run a pending @action) -------^
+      \-> compose (refused / out of scope) ------^
 
 The LLM only (a) picks intents when regex can't, (b) writes grounded text from evidence,
 (c) explains tool results. Decisions and numbers come from code.
@@ -23,10 +24,8 @@ from app.precedence import filter_chunks
 from app.retrieval import store
 from app.retrieval.embed import tokens
 from app.rules import RuleMissing, RuleUnresolved, get_rule
-from app.schemas import NOT_FOUND_MSG, AnswerType
+from app.schemas import AnswerType
 
-REFUSE_OTHER = "I can only help with records on your own account."
-REFUSE_LOGIN = "Please sign in so I can look at your own records. I can still answer general policy questions."
 STOP = set(tokens("what which when where who whom whose why how is are was were the a an to of for in on at by "
                   "with from do does did can could should would will i me my mine you your we our it its this "
                   "that these those there here be been about tell please any some much many after before "
@@ -36,6 +35,7 @@ STOP = set(tokens("what which when where who whom whose why how is are was were 
 class S(TypedDict, total=False):
     question: str
     subject_id: str | None
+    confirm_action_id: str | None
     as_of: date
     trace_id: str
     t0: float
@@ -60,16 +60,23 @@ def n_guard(s: S) -> dict:
     tier = und.tier or DOMAIN.subject_tier(sid)
     und.extra.setdefault("tier", tier)
 
+    if any(re.search(p, q, re.I) for p in DOMAIN.OUT_OF_SCOPE):
+        flags["out_of_scope"] = True
+        return {"und": und, "flags": flags, "route": "refuse", "refuse_msg": DOMAIN.OUT_OF_SCOPE_MSG}
+    if s.get("confirm_action_id"):
+        if not sid or not DOMAIN.subject_exists(sid):
+            return {"und": und, "flags": flags, "route": "refuse", "refuse_msg": DOMAIN.REFUSE_LOGIN_MSG}
+        return {"und": und, "flags": flags, "route": "confirm"}
     # identity comes ONLY from the header; ids in the text are never trusted (R7)
     other_subjects = {m.upper() for m in DOMAIN.SUBJECT_ID.findall(q)} - {(sid or "").upper()}
     if other_subjects:
-        return {"und": und, "flags": flags, "route": "refuse", "refuse_msg": REFUSE_OTHER}
+        return {"und": und, "flags": flags, "route": "refuse", "refuse_msg": DOMAIN.REFUSE_OTHER_MSG}
     if und.personal or und.record_ids:
         if not sid or not DOMAIN.subject_exists(sid):
-            return {"und": und, "flags": flags, "route": "refuse", "refuse_msg": REFUSE_LOGIN}
+            return {"und": und, "flags": flags, "route": "refuse", "refuse_msg": DOMAIN.REFUSE_LOGIN_MSG}
         # same message whether the record is someone else's or does not exist
         if any(not DOMAIN.owns_record(sid, r) for r in und.record_ids):
-            return {"und": und, "flags": flags, "route": "refuse", "refuse_msg": REFUSE_OTHER}
+            return {"und": und, "flags": flags, "route": "refuse", "refuse_msg": DOMAIN.REFUSE_OTHER_MSG}
         return {"und": und, "flags": flags, "route": "personal"}
     return {"und": und, "flags": flags, "route": "retrieve"}
 
@@ -87,6 +94,28 @@ def n_personal(s: S) -> dict:
     except RuleUnresolved:
         return {"route": "conflict", "tool_result": ToolResult(), "trace": trace}
     return {"tool_result": tr, "trace": trace, "route": "retrieve" if tr.followup_queries else "compose"}
+
+
+def n_confirm(s: S) -> dict:
+    """Runs a pending @action the user confirmed. Same refusal for someone else's id and an unknown one."""
+    sid, aid = s["subject_id"], s["confirm_action_id"]
+    row = db.q1("SELECT * FROM actions WHERE action_id = ? AND subject_id = ?", (aid, sid))
+    if not row or row["status"] == "pending_approval":
+        return {"route": "refuse", "refuse_msg": DOMAIN.REFUSE_OTHER_MSG if not row else
+                f"Action {aid} is waiting for staff approval."}
+    if row["status"] == "done":  # confirming twice returns the first result, runs nothing
+        done = json.loads(row["result"] or "{}")
+        say = done.pop("_say", f"Action {aid} was already completed.")
+        return {"route": "compose", "trace": s["trace"], "tool_result": ToolResult(
+            tool_calls=[{"tool": row["tool"], "input": {}, "output": done, "action": True, "changes": []}],
+            answer=say)}
+    p = json.loads(row["payload"])
+    try:
+        tr = DOMAIN.run_tools(sid, p["target"], Understanding(**p["und"]), s["as_of"], s["trace"],
+                              queue=[row["tool"]], confirm_id=aid)
+    except RuleUnresolved:
+        return {"route": "conflict", "tool_result": ToolResult(), "trace": s["trace"]}
+    return {"route": "compose", "tool_result": tr, "trace": s["trace"]}
 
 
 def _param_for(q: str) -> str | None:
@@ -226,16 +255,22 @@ def n_compose(s: S) -> dict:
                            "section": x.get("source_section"), "version": docs.get(x["source_doc_id"], {}).get("version"),
                            "effective_from": x.get("effective_from")} for x in rows]
     elif tr is not None:
-        answer = tr.answer or NOT_FOUND_MSG
+        answer = tr.answer or DOMAIN.NOT_FOUND_MSG
         r["tools_invoked"] = [{k: c[k] for k in ("tool", "input", "output")} for c in tr.tool_calls]
         cites = list(trace.get("citations", []))
+        if tr.tool_calls and DOMAIN.SYSTEM_NAME:
+            cites.insert(0, {"doc_id": DOMAIN.SYSTEM_NAME, "title": DOMAIN.SYSTEM_NAME, "system": DOMAIN.SYSTEM_NAME})
         if tr.followup_queries and hits.get("current"):
             g = _grounded(tr.followup_queries[0], hits["current"][: config.TOP_K])
             if g["support"] != "none":
                 answer += " Next steps: " + g["answer"]
                 cites += [_cite(h) for h in g["used"]]
-        r.update(answer=answer, citations=cites,
-                 answer_type=AnswerType.calculated if tr.tool_calls else AnswerType.not_found)
+        # done or sent for approval -> action_completed; waiting on the user's confirm -> clarification_needed
+        acts = {c["output"].get("status") for c in tr.tool_calls if c.get("action")}
+        at = (AnswerType.clarification_needed if "pending" in acts else
+              AnswerType.action_completed if acts else
+              AnswerType.calculated if tr.tool_calls else AnswerType.not_found)
+        r.update(answer=answer, citations=cites, answer_type=at)
         r["explanation"] = _explain(q, answer, tr, trace, llm_ok) if tr.tool_calls else ""
     elif s.get("param_value") is not None:
         p, v = s["param"], s["param_value"]
@@ -256,7 +291,7 @@ def n_compose(s: S) -> dict:
         top_cos = max((h["cosine"] or 0) for h in pool) if cur else 0
         g = _grounded(q, cur[: config.TOP_K], llm_ok) if cur and top_cos >= config.MIN_RELEVANCE else None
         if not g or g["support"] == "none":
-            r.update(answer=NOT_FOUND_MSG, answer_type=AnswerType.not_found)
+            r.update(answer=DOMAIN.NOT_FOUND_MSG, answer_type=AnswerType.not_found)
         else:
             ans = g["answer"]
             if g["support"] == "partial" and g.get("missing"):
@@ -264,6 +299,9 @@ def n_compose(s: S) -> dict:
             r.update(answer=ans, answer_type=AnswerType.retrieved_fact, citations=[_cite(h) for h in g["used"]])
             r["explanation"] = "Answer composed from the cited passages only."
         flags["injection_in_evidence"] = bool(g and g.get("flagged"))
+    if any(h.get("fallback") for h in hits.get("all", [])):  # embeddings were down for this question
+        flags["embedding_fallback"] = "bm25"
+        r["assumptions"].append("Keyword search only: the embedding service was unavailable.")
 
     # versioning notes: superseded chunks, upcoming docs, unofficial content
     if r["answer_type"] not in (AnswerType.refused, AnswerType.clarification_needed):
@@ -289,7 +327,7 @@ def n_compose(s: S) -> dict:
     r["applied_rules"] = trace.get("applied_rules", [])
     r["conflicts_detected"] = trace.get("conflicts", [])
     r["assumptions"] += [a for a in trace.get("assumptions", []) if a not in r["assumptions"]]
-    if r["answer_type"] not in (AnswerType.calculated, AnswerType.retrieved_fact):
+    if r["answer_type"] not in (AnswerType.calculated, AnswerType.retrieved_fact, AnswerType.action_completed):
         r["assumptions"] = []
     r["answer_type"] = AnswerType(r["answer_type"]).value
     return {"response": r, "flags": flags, "trace": trace}
@@ -313,13 +351,16 @@ def n_audit(s: S) -> dict:
                               for h in hits.get("all", [])],
         "precedence_decisions": [why for _, why in hits.get("dropped", [])]
                                 + [c["resolution"][0] for c in r["conflicts_detected"] if c.get("resolution")],
-        "tools_invoked": [{"tool": c["tool"], "status": "ok", "ms": c.get("ms"), "input": c["input"],
-                           "output": c["output"]} for c in (s.get("tool_result") or ToolResult()).tool_calls],
+        "tools_invoked": [{"tool": c["tool"], "status": c["output"].get("status", "ok"), "ms": c.get("ms"),
+                           "input": c["input"], "output": c["output"], **({"changes": c["changes"]} if c.get("action")
+                                                                          else {})}
+                          for c in (s.get("tool_result") or ToolResult()).tool_calls],
         "rules_applied": r["applied_rules"],
         "conflicts_detected": r["conflicts_detected"],
         "answer_type": r["answer_type"],
         "safety_flags": s.get("flags", {}),
         "model": u["model"], "llm_calls": u["llm_calls"], "tokens": u["tokens"], "latency_ms": latency,
+        "llm_errors": u["llm_errors"], "llm_rate_limited": u["rate_limited"], "embed_errors": u["embed_errors"],
     }
     db.execute("INSERT INTO audit_log (trace_id, timestamp, customer_id, record) VALUES (?,?,?,?)",
                (rec["trace_id"], rec["timestamp"], rec["customer_id"], json.dumps(rec, default=str)))
@@ -329,12 +370,14 @@ def n_audit(s: S) -> dict:
 # ---------------- graph ----------------
 def _build():
     g = StateGraph(S)
-    for name, fn in [("guard", n_guard), ("personal", n_personal), ("retrieve", n_retrieve),
-                     ("compose", n_compose), ("audit", n_audit)]:
+    for name, fn in [("guard", n_guard), ("personal", n_personal), ("confirm", n_confirm),
+                     ("retrieve", n_retrieve), ("compose", n_compose), ("audit", n_audit)]:
         g.add_node(name, fn)
     g.set_entry_point("guard")
     g.add_conditional_edges("guard", lambda s: s["route"],
-                            {"refuse": "compose", "personal": "personal", "retrieve": "retrieve"})
+                            {"refuse": "compose", "personal": "personal", "retrieve": "retrieve",
+                             "confirm": "confirm"})
+    g.add_edge("confirm", "compose")
     g.add_conditional_edges("personal", lambda s: s["route"],
                             {"clarify": "compose", "conflict": "compose", "compose": "compose",
                              "retrieve": "retrieve"})
@@ -347,9 +390,10 @@ def _build():
 GRAPH = _build()
 
 
-def run(question: str, subject_id: str | None, as_of: date | None) -> dict:
+def run(question: str, subject_id: str | None, as_of: date | None, confirm_action_id: str | None = None) -> dict:
     llm.reset_usage()
     s: S = {"question": question, "subject_id": (subject_id or "").strip().upper() or None,
+            "confirm_action_id": (confirm_action_id or "").strip() or None,
             "as_of": as_of or date.today(), "trace_id": uuid.uuid4().hex[:12], "t0": time.time(),
             "trace": {}, "flags": {}}
     out = GRAPH.invoke(s)

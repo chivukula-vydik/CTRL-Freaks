@@ -49,7 +49,7 @@ def init_db() -> None:
 def reset() -> None:
     """Empty core + domain tables. Tests and the offline eval only, never against production."""
     from app.domain import DOMAIN
-    tables = ["rule_registry", "source_register", "audit_log", "pipeline_files"] + DOMAIN.tables()
+    tables = ["rule_registry", "source_register", "audit_log", "pipeline_files", "actions"] + DOMAIN.tables()
     with conn() as c:
         c.execute(f"TRUNCATE {', '.join(tables)} CASCADE")
 

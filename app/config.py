@@ -49,4 +49,6 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
 # below this fused relevance the system abstains (not_found). Tune with eval/run_eval.py
 MIN_RELEVANCE = float(os.getenv("MIN_RELEVANCE", "0.30"))
 
-ADMIN_KEY = os.getenv("ADMIN_KEY", "admin-dev-key")
+ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()
+if not ADMIN_KEY:  # no default: a key in the repo would be a public admin key on Vercel
+    raise RuntimeError("ADMIN_KEY is not set. Set it in .env locally or in the Vercel project env.")

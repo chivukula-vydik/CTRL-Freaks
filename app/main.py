@@ -40,7 +40,7 @@ def require_admin(x_admin_key: str | None = Header(default=None)) -> None:
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest, sid: str | None = Depends(subject)):
-    return agent.run(req.question, sid, req.as_of_date)
+    return agent.run(req.question, sid, req.as_of_date, req.confirm_action_id)
 
 
 @app.post("/ingest", response_model=IngestResponse)

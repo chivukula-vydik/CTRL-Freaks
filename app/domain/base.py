@@ -8,10 +8,12 @@ Scaffold one with:  python scripts/new_domain.py <name>
 Full worked example: examples/retail/domain.py
 """
 import csv
+import json
 import re
 import time
-from dataclasses import dataclass, field
-from datetime import date
+import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -21,6 +23,13 @@ from app.rules import get_rule
 POSSESSIVE = re.compile(r"\b(my|mine|i (bought|ordered|purchased|got|received|booked|borrowed|took|have))\b", re.I)
 _NAME_STOP = {"with", "from", "pack", "plus", "edition", "series", "model", "wireless", "smart", "classic",
               "premium", "basic", "mini", "ultra", "set", "inch", "cotton", "steel", "this", "that"}
+# opt-in: OUT_OF_SCOPE = COMMON_OUT_OF_SCOPE (+ your own) in a domain. Answered as refused, before any lookup
+COMMON_OUT_OF_SCOPE = [
+    r"\binvestment advice\b", r"\b(should|shall) i (buy|sell|invest|hold)\b", r"\bstock (tips?|picks?)\b",
+    r"\b(diagnose|diagnosis for) (me|my)\b", r"\bwhat (disease|illness|condition) do i have\b",
+    r"\bshould i (take|stop taking|increase|reduce) (my |the )?(medicine|medication|dose|tablets?)\b",
+    r"\blegal advice\b", r"\bshould i sue\b",
+]
 
 
 @dataclass
@@ -48,6 +57,9 @@ class Ctx:
     def __init__(self, domain: "Domain", sid: str, target: dict, und: Understanding, as_of: date, trace: dict):
         self.domain, self.sid, self.target, self.und, self.as_of, self.trace = domain, sid, target, und, as_of, trace
         self.outputs: dict[str, dict] = {}
+        self.confirm_id: str | None = None   # set when the user confirmed a pending action
+        self.writable = False                # True only while an @action runs
+        self.changes: list[dict] = []        # before/after of every ctx.execute, for the audit
 
     @property
     def tier(self) -> str | None:
@@ -72,12 +84,44 @@ class Ctx:
     def q1(self, sql: str, params: tuple | dict = ()) -> dict | None:
         return db.q1(sql, params)
 
+    def execute(self, sql: str, params: dict | None = None) -> list[dict]:
+        """The only write path. Inside an @action, one INSERT/UPDATE/DELETE whose rows are scoped by :sid,
+        which is bound here to the logged-in user (never from input). Returns the changed rows."""
+        # ponytail: guards tool authors against a missing owner filter, not a SQL parser. Single-table
+        # statements; :sid must be in the WHERE (UPDATE/DELETE) or anywhere (INSERT ... SELECT ... :sid)
+        m = re.match(r"\s*(update|delete\s+from|insert\s+into)\s+(\w+)", sql, re.I)
+        where = re.search(r"\bwhere\b(.*)$", sql, re.I | re.S)
+        op = m[1].split()[0].upper() if m else ""
+        if not self.writable:
+            raise PermissionError("ctx.execute is only allowed inside an @action")
+        if not m or ":sid" not in (sql if op == "INSERT" else where[1] if where else ""):
+            raise PermissionError("writes must be one INSERT/UPDATE/DELETE scoped to the user with :sid")
+        p, table = {**(params or {}), "sid": self.sid}, m[2]
+        with db.conn() as c:  # one transaction: before, change, after
+            before = c.execute(*db._pg(f"SELECT * FROM {table} WHERE {where[1]}", p)).fetchall() \
+                if op != "INSERT" else []
+            rows = c.execute(*db._pg(sql.rstrip().rstrip(";") + " RETURNING *", p)).fetchall()
+        self.changes.append({"table": table, "op": op, "before": before, "after": [] if op == "DELETE" else rows})
+        return rows
+
 
 def tool(fn: Callable) -> Callable:
     """Mark a function as a tool. It takes ctx and returns a dict. Optional special keys:
     _say: sentence for the answer, _next: [tool names] to run after, _followup: doc query."""
     fn._is_tool = True
     return fn
+
+
+def action(risk: str = "medium") -> Callable:
+    """A tool that changes data (writes via ctx.execute). Every call gets a row in `actions`.
+    low: runs at once. medium: the answer asks the user to confirm (POST /ask with confirm_action_id).
+    high: recorded as pending_approval for a human, never run by the agent."""
+    assert risk in {"low", "medium", "high"}
+
+    def deco(fn: Callable) -> Callable:
+        fn._is_tool, fn._risk = True, risk
+        return fn
+    return deco
 
 
 class Domain:
@@ -112,6 +156,14 @@ class Domain:
     PARAMETERS: list[str] = []               # rule_registry parameters tools read
     PARAM_QUERIES: dict[str, list[str]] = {}  # regexes mapping a policy question to a parameter
     PARAM_UNIT: dict[str, str] = {}          # e.g. {"return_window_days": "{v} days"}
+
+    # ---- wording + scope (paste the problem doc's exact text) ----
+    NOT_FOUND_MSG = "I could not find this information in the authorised sources."
+    REFUSE_OTHER_MSG = "I can only help with records on your own account."
+    REFUSE_LOGIN_MSG = "Please sign in so I can look at your own records. I can still answer general policy questions."
+    OUT_OF_SCOPE_MSG = "I can't help with that. It is outside what this assistant is allowed to answer."
+    OUT_OF_SCOPE: list[str] = []             # regexes answered as refused; see COMMON_OUT_OF_SCOPE
+    SYSTEM_NAME = ""                         # e.g. "Hospital Scheduling System": cited for tool answers
 
     # =================================================================
     def tools(self) -> dict[str, Callable]:
@@ -247,12 +299,14 @@ class Domain:
         name = t.get(self.TARGET_NAME_COL, "") if self.TARGET_NAME_COL else ""
         return f"{name} in {t.get(self.RECORD_KEY)}".strip()
 
-    def run_tools(self, sid: str, target: dict, und: Understanding, as_of: date, trace: dict) -> ToolResult:
-        """Runs PLAN[intent] tools in order, then any _next they ask for. Each tool once."""
+    def run_tools(self, sid: str, target: dict, und: Understanding, as_of: date, trace: dict,
+                  queue: list[str] | None = None, confirm_id: str | None = None) -> ToolResult:
+        """Runs PLAN[intent] tools (or `queue`) in order, then any _next they ask for. Each tool once."""
         res = ToolResult()
         ctx = Ctx(self, sid, target, und, as_of, trace)
+        ctx.confirm_id = confirm_id
         registry = self.tools()
-        queue = [t for i in und.intents for t in self.PLAN.get(i, [])]
+        queue = list(queue) if queue is not None else [t for i in und.intents for t in self.PLAN.get(i, [])]
         done, lines = set(), []
         base_input = {c: target.get(c) for c in self.TARGET_ID_COLS if target.get(c) is not None}
         base_input.update({f"what_if_{k}": v for k, v in und.what_if.items()})
@@ -264,11 +318,16 @@ class Domain:
                 continue
             done.add(name)
             t0 = time.perf_counter()
-            out = registry[name](ctx) or {}
+            fn, n_changes = registry[name], len(ctx.changes)
+            risk = getattr(fn, "_risk", None)
+            out = (self._act(ctx, name, fn, risk) if risk else fn(ctx)) or {}
             ms = round((time.perf_counter() - t0) * 1000, 1)
             clean = {k: v for k, v in out.items() if not k.startswith("_")}
             ctx.outputs[name] = clean
-            res.tool_calls.append({"tool": name, "input": base_input, "output": clean, "ms": ms})
+            call = {"tool": name, "input": base_input, "output": clean, "ms": ms}
+            if risk:
+                call.update(action=True, changes=ctx.changes[n_changes:])
+            res.tool_calls.append(call)
             if out.get("_say"):
                 lines.append(out["_say"])
             if out.get("_followup"):
@@ -276,6 +335,44 @@ class Domain:
             queue += out.get("_next", [])
         res.answer = " ".join(lines)
         return res
+
+    def _act(self, ctx: Ctx, name: str, fn: Callable, risk: str) -> dict:
+        """Hold (pending / pending_approval) or run an @action, keeping its `actions` row current."""
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        ins = ("INSERT INTO actions (action_id, subject_id, tool, risk, status, payload, created_at) "
+               "VALUES (?,?,?,?,?,?,?)")
+        payload = json.dumps({"target": ctx.target, "und": asdict(ctx.und)}, default=str)
+        if ctx.confirm_id:  # claim first so two confirms can't both run it
+            aid = ctx.confirm_id
+            if not db.execute("UPDATE actions SET status = 'done', updated_at = ? WHERE action_id = ? AND "
+                              "subject_id = ? AND status = 'pending'", (now, aid, ctx.sid)):
+                return {"result": "ALREADY_HANDLED", "action_id": aid, "status": "done",
+                        "_say": f"Action {aid} was already handled."}
+        elif risk != "low":
+            aid = "A-" + uuid.uuid4().hex[:10]
+            status = "pending_approval" if risk == "high" else "pending"
+            db.execute(ins, (aid, ctx.sid, name, risk, status, payload, now))
+            say = (f"This needs approval from staff before it happens. Reference {aid}." if risk == "high" else
+                   f"Please confirm: {name.replace('_', ' ')} for {self.describe_target(ctx.target)}. "
+                   f"Send confirm_action_id={aid} to go ahead.")
+            return {"result": status.upper(), "action_id": aid, "status": status, "_say": say}
+        else:
+            aid = "A-" + uuid.uuid4().hex[:10]
+            db.execute(ins, (aid, ctx.sid, name, risk, "done", payload, now))
+        ctx.writable = True
+        try:
+            out = fn(ctx) or {}
+        except Exception:
+            if ctx.confirm_id:  # let the user confirm again
+                db.execute("UPDATE actions SET status = 'pending' WHERE action_id = ?", (aid,))
+            raise
+        finally:
+            ctx.writable = False
+        out.update(action_id=aid, status="done")
+        db.execute("UPDATE actions SET result = ?, updated_at = ? WHERE action_id = ?",
+                   (json.dumps({k: v for k, v in out.items() if not k.startswith("_") or k == "_say"},
+                               default=str), now, aid))
+        return out
 
     # ---- judge test data ----
     def tables(self) -> list[str]:

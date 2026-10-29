@@ -109,14 +109,24 @@ def page_for(doc_id: str, section: str | None) -> int | None:
     return min(pages) if pages else None
 
 
+def _overlap(qt: set[str], text: str) -> float:
+    # ponytail: share of query terms found in the chunk, a stand-in for cosine when embeddings are down.
+    # Looser than cosine (stopwords count); MIN_RELEVANCE still gates and the LLM can still say "none"
+    return len(qt & set(tokens(text))) / (len(qt) or 1)
+
+
 def search(query: str, k: int = config.TOP_K) -> list[dict]:
-    """Returns hits sorted by fused score. Each hit: id, text, meta, score, cosine."""
+    """Returns hits sorted by fused score. Each hit: id, text, meta, score, cosine.
+    Embedding API down / rate limited -> BM25 only, every hit marked fallback="bm25"."""
     total = count()
     if total == 0:
         return []
     n = min(k * 4, total)
-    qv = get_embedder().query(query)
-    vr = client().query_points(config.COLLECTION, query=qv, limit=n, with_payload=True).points
+    try:
+        qv = get_embedder().query(query)
+    except Exception:
+        qv = None
+    vr = client().query_points(config.COLLECTION, query=qv, limit=n, with_payload=True).points if qv else []
     hits: dict[str, dict] = {}
     for rank, p in enumerate(vr):
         i, d, m = _split(p.payload)
@@ -138,8 +148,16 @@ def search(query: str, k: int = config.TOP_K) -> list[dict]:
     out = sorted(hits.values(), key=lambda h: -h["score"])[:k]
     # fill cosine for BM25-only hits so abstention has one comparable number
     missing = [h for h in out if h["cosine"] is None]
-    if missing:
-        embs = get_embedder().docs([h["text"] for h in missing])
-        for h, e in zip(missing, embs):
-            h["cosine"] = sum(a * b for a, b in zip(qv, e))
+    if missing and qv:
+        try:
+            embs = get_embedder().docs([h["text"] for h in missing])
+            for h, e in zip(missing, embs):
+                h["cosine"] = sum(a * b for a, b in zip(qv, e))
+        except Exception:
+            qv = None
+    if not qv:
+        qt = set(tokens(query))
+        for h in out:
+            h["cosine"] = h["cosine"] if h["cosine"] is not None else _overlap(qt, h["text"])
+            h["fallback"] = "bm25"
     return out

@@ -88,7 +88,7 @@ def test_audit_access(client):
     tid = r["trace_id"]
     assert client.get(f"/audit/{tid}", headers={"X-Customer-Id": "C1001"}).status_code == 200
     assert client.get(f"/audit/{tid}", headers={"X-Customer-Id": "C1002"}).status_code == 404
-    rec = client.get(f"/audit/{tid}", headers={"X-Admin-Key": "admin-dev-key"}).json()
+    rec = client.get(f"/audit/{tid}", headers={"X-Admin-Key": "test-admin-key"}).json()
     assert rec["tools_invoked"] and "latency_ms" in rec
 
 
@@ -130,3 +130,39 @@ def test_unresolvable_conflict_flagged(client):
                                                "text/markdown")}, data={"metadata": json.dumps(meta)})
     r = ask(client, "What is the restocking fee for beauty products?")
     assert r["answer_type"] == "conflict_flagged" and len(r["citations"]) == 2
+
+
+def _ask_confirm(client, aid, cid):
+    r = client.post("/ask", json={"question": "yes", "as_of_date": "2026-10-06", "confirm_action_id": aid},
+                    headers={"X-Customer-Id": cid})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_medium_risk_action_needs_confirm(client, monkeypatch):
+    from app.domain import DOMAIN
+    monkeypatch.setattr(type(DOMAIN).raise_return, "_risk", "medium")
+    a = ask(client, "Please raise a return for the cookware in O-100002", "C1001")
+    held = a["tools_invoked"][-1]["output"]
+    assert a["answer_type"] == "clarification_needed" and held["status"] == "pending" and "returns" not in str(held)
+    assert _ask_confirm(client, held["action_id"], "C1002")["answer_type"] == "refused"   # not theirs
+    b = _ask_confirm(client, held["action_id"], "C1001")
+    out = b["tools_invoked"][-1]["output"]
+    assert b["answer_type"] == "action_completed" and out["result"] == "RAISED" and out["status"] == "done"
+    again = _ask_confirm(client, held["action_id"], "C1001")   # second confirm runs nothing
+    assert again["answer_type"] == "action_completed" and again["tools_invoked"][-1]["output"]["return_id"] == \
+        out["return_id"]
+    rec = client.get(f"/audit/{b['trace_id']}", headers={"X-Admin-Key": "test-admin-key"}).json()
+    ch = rec["tools_invoked"][-1]["changes"][0]
+    assert ch["op"] == "INSERT" and ch["before"] == [] and ch["after"][0]["return_id"] == out["return_id"]
+
+
+def test_high_risk_action_waits_for_approval(client, monkeypatch):
+    from app.domain import DOMAIN
+    monkeypatch.setattr(type(DOMAIN).raise_return, "_risk", "high")
+    a = ask(client, "Please raise a return for the laptop in O-100003", "C1002")
+    held = a["tools_invoked"][-1]["output"]
+    assert a["answer_type"] == "action_completed" and held["status"] == "pending_approval"
+    assert _ask_confirm(client, held["action_id"], "C1002")["answer_type"] == "refused"   # user can't self-approve
+    r = ask(client, "Please raise a return for the laptop in O-100003", "C1002")
+    assert r["tools_invoked"][-1]["output"]["status"] == "pending_approval"   # still no return row written

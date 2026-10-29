@@ -8,7 +8,7 @@ import re
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.domain.base import Domain, Understanding, tool
+from app.domain.base import Domain, Understanding, action, tool
 
 
 def _money(x) -> float:
@@ -233,7 +233,7 @@ CREATE TABLE IF NOT EXISTS returns (
         return {"result": "EXPIRED", "warranty_months": months, "warranty_end": end.isoformat(),
                 "_say": f"The warranty expired on {end.isoformat()}."}
 
-    @tool
+    @action(risk="low")  # medium would ask the user to confirm first; high would wait for staff
     def raise_return(self, ctx):
         """State-changing: re-checks eligibility itself and is idempotent (safe to call twice)."""
         it = self._item(ctx)
@@ -249,13 +249,16 @@ CREATE TABLE IF NOT EXISTS returns (
             return {"result": "NOT_RAISED", "eligibility": elig["result"], "_say": elig.get("_say", "")}
         reason = ctx.und.extra.get("reason", "CHANGED_MIND")
         ref = self._refund(ctx, it, reason)
-        from app import db
         n = (ctx.q1("SELECT COUNT(*) AS n FROM returns")["n"] or 0) + 1
         while ctx.q1("SELECT 1 FROM returns WHERE return_id = ?", (f"R-{n:06d}",)):
             n += 1
         rid = f"R-{n:06d}"
-        db.execute("INSERT INTO returns VALUES (?,?,?,?,?,?,?)",
-                   (rid, it["order_id"], it["sku"], ctx.as_of.isoformat(), reason, "REQUESTED", ref["refund_amount"]))
+        # returns has no customer column, so ownership is proven through orders (:sid is bound by ctx)
+        ctx.execute("""INSERT INTO returns (return_id, order_id, sku, requested_on, reason, status, refund_amount)
+                       SELECT :rid, order_id, :sku, :d, :reason, 'REQUESTED', :amt FROM orders
+                       WHERE order_id = :oid AND customer_id = :sid""",
+                    {"rid": rid, "sku": it["sku"], "d": ctx.as_of.isoformat(), "reason": reason,
+                     "amt": ref["refund_amount"], "oid": it["order_id"]})
         return {"result": "RAISED", "return_id": rid, "refund_amount": ref["refund_amount"],
                 "requires_human_approval": ref["requires_human_approval"],
                 "_say": f"Return {rid} raised; expected refund Rs {ref['refund_amount']:.2f}"

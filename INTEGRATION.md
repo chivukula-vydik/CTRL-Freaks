@@ -132,3 +132,22 @@ filters (enum/filterable values named in the question), "by <column>" grouping, 
   "date_from"?,"date_to"?,"top"?,"bottom"?}`, `POST /pipeline/ask` `{"question"}`
 - Eval: `python eval/run_pipeline.py --label x` -> calc accuracy, DQ accuracy, rejected rows CSV
 - A calculation the ops can't express: add a function next to `calc()` and call it from the endpoint
+
+## Optional plug-ins (all off by default, set in the domain class)
+
+| Need in the problem doc | Set | Default |
+|---|---|---|
+| Exact not-found / refusal wording | `NOT_FOUND_MSG`, `REFUSE_OTHER_MSG`, `REFUSE_LOGIN_MSG`, `OUT_OF_SCOPE_MSG` | generic text |
+| "Do not give investment advice / diagnoses" | `OUT_OF_SCOPE = COMMON_OUT_OF_SCOPE + [r"...", ...]` -> `refused` | `[]` |
+| Cite a live system, e.g. "Hospital Scheduling System" | `SYSTEM_NAME = "..."` -> tool answers get a citation with `system` set | `""` |
+| Agent changes data (book, cancel, block card) | `@action(risk="low"\|"medium"\|"high")` instead of `@tool`, writes only via `ctx.execute(sql, params)` | none |
+
+Actions: `low` runs at once; `medium` answers `clarification_needed` with an `action_id`, then
+`POST /ask {"question": "yes", "confirm_action_id": "<id>"}` (same user header) runs it -> `action_completed`;
+`high` is stored as `pending_approval` and never run by the agent. Every action has a row in `actions`
+and the audit record holds before/after rows. `ctx.execute` must scope rows with `:sid` (bound to the
+logged-in user). Example: `raise_return` in `examples/retail/domain.py`.
+
+Degraded mode: if embeddings fail, retrieval goes keyword-only (BM25), sets `safety_flags.embedding_fallback`
+and adds an assumption. LLM/embedding errors and 429s are counted per request in the audit record
+(`llm_errors`, `llm_rate_limited`, `embed_errors`) and per instance in `/health`. `ADMIN_KEY` is required.
