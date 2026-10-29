@@ -1,8 +1,0 @@
-{"fields": {
-  "party_name": {"type": "str", "required": true, "labels": ["Party Name", "Name"]},
-  "reference_id": {"type": "str", "required": true, "pattern": "^[A-Z]{3}-[0-9]{4}$", "labels": ["Reference ID", "Ref"]},
-  "doc_date": {"type": "date", "labels": ["Date"]},
-  "category": {"type": "str", "enum": ["Type A", "Type B"], "labels": ["Category"]},
-  "total_amount": {"type": "number", "required": true, "min": 0, "labels": ["Total Amount", "Total"]},
-  "secondary_amount": {"type": "number", "min": 0, "labels": ["Secondary Amount"]}
-}}
