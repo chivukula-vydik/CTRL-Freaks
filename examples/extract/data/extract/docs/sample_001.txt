@@ -1,0 +1,7 @@
+SAMPLE DOCUMENT
+Party Name: Sample Party One
+Reference ID: ABC-1234
+Date: 14/02/2024
+Category: Type A
+Total Amount: 18,40,000
+Secondary Amount: 25 lakh
