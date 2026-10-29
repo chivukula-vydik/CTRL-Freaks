@@ -1,0 +1,4 @@
+# local only (UI + tests); Vercel installs requirements.txt
+-r requirements.txt
+streamlit>=1.38
+pytest==9.1.1

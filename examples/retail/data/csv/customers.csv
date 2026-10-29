@@ -1,0 +1,5 @@
+customer_id,full_name,tier,city,joined_year
+C1001,Asha Varma,STANDARD,Hyderabad,2021
+C1002,Ravi Teja,GOLD,Bengaluru,2019
+C1003,Meera Iyer,STANDARD,Chennai,2023
+C1004,Kiran Rao,PLATINUM,Pune,2018

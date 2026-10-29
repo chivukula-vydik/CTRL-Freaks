@@ -1,0 +1,2 @@
+return_id,order_id,sku,requested_on,reason,status,refund_amount
+R-000001,O-100007,SKU-F001,2026-10-01,CHANGED_MIND,REQUESTED,1939

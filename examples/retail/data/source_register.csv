@@ -1,0 +1,8 @@
+doc_id,title,issuer,authority_level,doc_type,version,effective_from,effective_to,supersedes,scope_categories,scope_tiers,provenance,retrieved_on,synthetic,file
+RET-POL-2024,"Return, Refund and Exchange Policy",Legal and Customer Experience,1,regulation,3.1,2024-07-01,,,ALL,ALL,fictional retailer (Acme),2026-10-29,Y,ret_pol_2024.md
+WAR-POL-2025,Warranty Policy,Legal,1,regulation,2.0,2025-01-01,,,ALL,ALL,fictional retailer (Acme),2026-10-29,Y,war_pol_2025.md
+CIRC-2026-07,Electronics Return Window,Head Office Customer Experience,2,circular,1.0,2026-08-01,,RET-POL-2024#3.1,ELECTRONICS,ALL,fictional retailer (Acme),2026-10-29,Y,circ_2026_07.md
+CIRC-2026-09,Loyalty Fee Waiver,Head Office Loyalty Programme,2,circular,1.0,2026-09-01,,RET-POL-2024#4.1,ALL,GOLD;PLATINUM,fictional retailer (Acme),2026-10-29,Y,circ_2026_09.md
+CIRC-FEST-2026,Festive Season Returns,Head Office Customer Experience,2,circular,1.0,2026-11-01,2027-01-31,RET-POL-2024#3.2,FASHION,ALL,fictional retailer (Acme),2026-10-29,Y,circ_fest_2026.md
+FAQ-HC-2026,Help Centre FAQ,Customer Care,4,faq,1.0,2026-09-15,,,ALL,ALL,fictional retailer (Acme),2026-10-29,Y,faq_hc_2026.md
+FORUM-01,Community forum post,Unknown user,5,unofficial,n/a,2026-06-01,,,ALL,ALL,synthetic injection test,2026-10-29,Y,forum_post.md

@@ -1,0 +1,14 @@
+rule_id,description,parameter,operator,value,scope_categories,scope_tiers,effective_from,effective_to,source_doc_id,source_section
+RET-WIN-ELEC-01,Electronics return window,return_window_days,<=,10,ELECTRONICS,ALL,2024-07-01,,RET-POL-2024,3.1
+RET-WIN-ELEC-02,Electronics return window (revised),return_window_days,<=,7,ELECTRONICS,ALL,2026-08-01,,CIRC-2026-07,1
+RET-WIN-ELEC-FAQ,FAQ electronics window,return_window_days,<=,15,ELECTRONICS,ALL,2026-09-15,,FAQ-HC-2026,2
+RET-WIN-FASH-01,Fashion return window,return_window_days,<=,30,FASHION,ALL,2024-07-01,,RET-POL-2024,3.2
+RET-WIN-FASH-02,Festive fashion window,return_window_days,<=,45,FASHION,ALL,2026-11-01,2027-01-31,CIRC-FEST-2026,1
+RET-WIN-HOME-01,Home return window,return_window_days,<=,15,HOME,ALL,2024-07-01,,RET-POL-2024,3.3
+RET-NR-GROC,Grocery not returnable,returnable,=,0,GROCERY,ALL,2024-07-01,,RET-POL-2024,3.4
+RET-NR-BEAU,Beauty not returnable,returnable,=,0,BEAUTY,ALL,2024-07-01,,RET-POL-2024,3.4
+FEE-RESTOCK-01,Restocking fee (change of mind),restocking_fee_pct,=,10,ALL,ALL,2024-07-01,,RET-POL-2024,4.1
+FEE-RESTOCK-LOY,Restocking fee waived for loyalty tiers,restocking_fee_pct,=,0,ALL,GOLD;PLATINUM,2026-09-01,,CIRC-2026-09,1
+FEE-SHIP-01,Reverse shipping fee (change of mind),reverse_shipping_fee,=,60,ALL,ALL,2024-07-01,,RET-POL-2024,4.2
+FEE-WAIVE-01,No fees for defective/damaged/wrong item,defect_fee_waiver,=,1,ALL,ALL,2024-07-01,,RET-POL-2024,4.3
+REF-LIMIT-01,Refund approval limit,auto_refund_limit,<=,50000,ALL,ALL,2024-07-01,,RET-POL-2024,5.2

@@ -1,0 +1,7 @@
+.env
+store/
+tests/
+eval/
+ui/
+data/
+**/__pycache__/
