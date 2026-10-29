@@ -1,0 +1,13 @@
+{"id": "Q1", "question": "What is the total amount?", "expected": 1390.5}
+{"id": "Q2", "question": "How many records are there?", "expected": 5}
+{"id": "Q3", "question": "How many records are done?", "expected": 3}
+{"id": "Q4", "question": "Average amount in 2024-04", "expected": 57.5}
+{"id": "Q5", "question": "Total amount by group name", "expected": {"Group A": 100, "Group B": 1250.5, "None": 40}}
+{"id": "Q6", "question": "Total amount for Group B", "expected": 1250.5}
+{"id": "Q7", "question": "What is the completion rate?", "expected": 60.0}
+{"id": "Q8", "question": "What is the weather tomorrow?", "expected_type": "not_found"}
+{"id": "DQ1", "dq": "records.rows_rejected", "expected": 6}
+{"id": "DQ2", "dq": "records.duplicates_dropped", "expected": 1}
+{"id": "DQ3", "dq": "records.defaults_filled.qty", "expected": 1}
+{"id": "DQ4", "dq": "records.orphan_keys.item_id->items", "expected": 1}
+{"id": "DQ5", "dq": "records.rows_clean", "expected": 5}

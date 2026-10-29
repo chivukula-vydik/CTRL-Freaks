@@ -23,6 +23,16 @@ class AskRequest(BaseModel):
     as_of_date: date | None = None
 
 
+
+class CalcRequest(BaseModel):
+    """Direct call of a pipeline metric (app/pipeline.py), no question parsing."""
+    metric: str
+    filters: dict | None = None
+    group_by: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+
+
 class Citation(BaseModel):
     doc_id: str
     title: str

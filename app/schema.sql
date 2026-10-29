@@ -40,3 +40,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
   customer_id TEXT,
   record      TEXT NOT NULL
 );
+
+-- raw CSVs uploaded for the data pipeline (app/pipeline.py); cleaned on read, so re-upload = re-clean
+CREATE TABLE IF NOT EXISTS pipeline_files (
+  table_name  TEXT PRIMARY KEY,
+  body        TEXT NOT NULL,
+  uploaded_at TEXT NOT NULL
+);

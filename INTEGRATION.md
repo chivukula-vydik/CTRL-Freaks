@@ -82,3 +82,55 @@ def check_x(self, ctx):
             "_next": ["other_tool"],             # chain
             "_followup": "how to appeal steps"}  # pulls cited procedure text from the docs
 ```
+
+## If the problem is field extraction from documents
+
+Scored on exact field values per document, not chat answers. No domain code: one JSON schema.
+
+```
+data/<name>/extract/
+  schema.json        {"fields": {"<field>": {"type": "str|number|date|bool", "required", "labels",
+                                              "hint", "pattern", "enum", "min", "max", "tol"}}}
+  docs/              the documents (pdf, docx, txt, scans)
+  expected.jsonl     {"doc": "<file name>", "<field>": <value>, ...}   one line per doc
+```
+
+Flow (`app/extract.py`): parse -> LLM returns `{field: {value, quote}}` -> code drops any value whose
+quote is not in the doc, coerces types (`12.5 lakh` -> 1250000, `3rd March 1990` -> 1990-03-03,
+`(1,234)` -> -1234), checks `pattern/enum/min/max/required` -> one row with `_sources` (quote + page),
+`_errors`, `_valid`. `MOCK_LLM=true` falls back to `Label: value` lines using `labels`.
+
+- API: `POST /extract` multipart `files` (many), optional `fields_json` form field
+- Eval: `python eval/run_extract.py --label x` -> field accuracy, doc exact match, per-field accuracy,
+  failures, and the output rows as `eval/reports/extract_x.csv`
+- Sample pack (placeholder fields, shows the format only): `examples/extract/data/extract/` (`--dir` it)
+- Cross-field checks (field A = B + C, etc.) go after `extract_file()` in the caller
+
+## If the problem is a data pipeline + analytics over CSVs
+
+Scored on correct numbers and data quality. No domain code: one JSON schema.
+
+```
+data/<name>/pipeline/
+  schema.json        tables (columns: type, required, default, pattern, enum, min, max, filterable; key)
+                     + metrics (op sum|avg|count|min|max|median|count_distinct|ratio, column, where,
+                       join, date_column, label, words)            full format: app/pipeline.py header
+  csv/<table>.csv    raw data, dirty is fine
+  expected.jsonl     {"id","question","expected"} | {"id","question","expected_type":"not_found"}
+                     | {"id","dq":"<table>.rows_rejected","expected":6}
+```
+
+Flow (`app/pipeline.py`): read CSV -> schema check (missing/extra columns) -> clean (trim, null
+tokens, number/date parsing, enum to canonical spelling, defaults) -> rejected rows with line number
++ reasons (bad type, required missing, rule broken, duplicate key) and exact duplicates dropped ->
+data-quality report per table (counts, nulls, fills, rejections by column, orphan join keys) ->
+`calc()`, the one calculation tool -> `ask()` picks metric (words, else LLM from the closed list),
+filters (enum/filterable values named in the question), "by <column>" grouping, dates (ISO, YYYY-MM,
+"in 2024") by code. The LLM never does maths; `MOCK_LLM=true` runs everything.
+
+- API: `POST /admin/pipeline/upload` (`<table>.csv` files, admin key, returns DQ report),
+  `GET /pipeline/report`, `GET /pipeline/metrics`, `POST /pipeline/calc` `{"metric","filters"?,"group_by"?,
+  "date_from"?,"date_to"?}`, `POST /pipeline/ask` `{"question"}`
+- Eval: `python eval/run_pipeline.py --label x` -> calc accuracy, DQ accuracy, rejected rows CSV
+- Sample pack (placeholder tables, shows the format only): `examples/pipeline/data/` (`--dir` it)
+- A calculation the ops can't express: add a function next to `calc()` and call it from the endpoint

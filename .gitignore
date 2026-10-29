@@ -4,3 +4,5 @@ __pycache__/
 .env
 .pytest_cache/
 eval/reports/*.json
+eval/reports/extract_*.csv
+eval/reports/pipeline_*.csv

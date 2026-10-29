@@ -1,0 +1,22 @@
+{"tables": {
+  "items": {"key": ["item_id"], "columns": {
+    "item_id": {"type": "str", "required": true},
+    "group_name": {"type": "str", "filterable": true}}},
+  "records": {"key": ["record_id"], "columns": {
+    "record_id": {"type": "str", "required": true, "pattern": "^R[0-9]{3}$"},
+    "item_id": {"type": "str", "required": true},
+    "amount": {"type": "number", "required": true, "min": 0},
+    "qty": {"type": "number", "min": 0, "default": 1},
+    "event_date": {"type": "date", "required": true},
+    "status": {"type": "str", "enum": ["done", "pending", "cancelled"]}}}},
+ "metrics": {
+  "total_amount": {"table": "records", "op": "sum", "column": "amount", "where": {"status": "done"},
+                   "join": {"items": "item_id"}, "date_column": "event_date",
+                   "label": "Total amount (done records)", "words": ["total", "sum"]},
+  "record_count": {"table": "records", "op": "count", "join": {"items": "item_id"}, "date_column": "event_date",
+                   "label": "Number of records", "words": ["how many", "count", "number of"]},
+  "avg_amount": {"table": "records", "op": "avg", "column": "amount", "date_column": "event_date",
+                 "label": "Average amount", "words": ["average", "\\bavg\\b", "mean"]},
+  "done_count": {"table": "records", "op": "count", "where": {"status": "done"}, "date_column": "event_date"},
+  "completion_rate": {"op": "ratio", "numerator": "done_count", "denominator": "record_count", "scale": 100,
+                      "label": "Completion rate (%)", "words": ["rate", "percent"]}}}
