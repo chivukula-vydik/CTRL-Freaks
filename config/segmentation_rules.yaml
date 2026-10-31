@@ -1,0 +1,100 @@
+# ──────────────────────────────────────────────────────────────
+# UC5 — Segmentation Rules (Step 2)
+# Aligned to: generate_dataset.py classify()
+# Order: first-match-wins. All matches → all_segments list.
+# ──────────────────────────────────────────────────────────────
+
+execution:
+  mode: first_match_wins
+  record_all_matches: true         # populate all_segments field
+  confidence_flag: near_boundary   # set when value within 10% of threshold
+
+rules:
+
+  # ── Rule 1: payment_reminder ──────────────────────────────
+  - id: SEG-01
+    segment: payment_reminder
+    priority: 1
+    description: >
+      Customer has at least one unpaid bill (status = due or overdue)
+      with due_date on or before snapshot_date + 7 days.
+      Target bill = the oldest such bill.
+    condition:
+      any_bill:
+        bill_status: ["due", "overdue"]
+        due_date: "<= snapshot_date + 7 days"
+    derived_fields:
+      target_bill_id: "oldest qualifying bill"
+      overdue_days: "snapshot_date - target_bill.due_date"
+      amount_outstanding: "target_bill.amount_due - target_bill.amount_paid"
+      total_outstanding: "sum(amount_due - amount_paid) for all qualifying bills"
+
+  # ── Rule 2: dormant ───────────────────────────────────────
+  - id: SEG-02
+    segment: dormant
+    priority: 2
+    description: >
+      No meaningful activity in the last 30 days.
+    condition:
+      last_activity_days: ">= 30"
+
+  # ── Rule 3: declining_activity ────────────────────────────
+  - id: SEG-03
+    segment: declining_activity
+    priority: 3
+    description: >
+      Activity dropped to 70% or below of the previous period,
+      with a minimum baseline of 10 in the previous period.
+    condition:
+      activity_prev_30d: ">= 10"
+      activity_30d: "<= 70% of activity_prev_30d"
+    formula: "activity_30d * 10 <= activity_prev_30d * 7"
+    near_boundary:
+      description: "Activity ratio between 70% and 77% (within 10% of threshold)"
+
+  # ── Rule 4: loyalty_candidate ─────────────────────────────
+  - id: SEG-04
+    segment: loyalty_candidate
+    priority: 4
+    description: >
+      Long-tenure customer in Gold or Platinum tier with strong
+      payment history (prepaid, or 6+ bills with 90%+ on-time).
+    condition:
+      tenure_months: ">= 24"
+      loyalty_tier: ["Gold", "Platinum"]
+      payment_check:
+        prepaid: "always qualifies"
+        postpaid:
+          bills_issued_last_12: ">= 6"
+          on_time_pct: ">= 90%"
+    formula: |
+      tenure_months >= 24
+      AND loyalty_tier IN ('Gold', 'Platinum')
+      AND (
+        plan_type == 'prepaid'
+        OR (bills_issued_last_12 >= 6
+            AND on_time_payments_last_12 * 10 >= bills_issued_last_12 * 9)
+      )
+    near_boundary:
+      description: "Tenure 22-23 months, or points near tier boundary (1999/2000, 7999/8000)"
+
+  # ── Rule 5: consistent ───────────────────────────────────
+  - id: SEG-05
+    segment: consistent
+    priority: 5
+    description: "Default segment — none of the above rules matched."
+    condition: "catch-all"
+
+# ── Tier derivation from loyalty_points ─────────────────────
+tier_from_points:
+  Silver: "points < 2000"
+  Gold: "2000 <= points < 8000"
+  Platinum: "points >= 8000"
+
+# ── Reason codes per segment ────────────────────────────────
+reason_codes:
+  payment_reminder: "Unpaid bill due within 7 days"
+  dormant: "No activity for 30+ days"
+  declining_activity: "Activity declined to 70% or below of previous period"
+  loyalty_candidate: "Long-tenure Gold/Platinum customer with strong payment record"
+  consistent: "Active customer, no special triggers"

@@ -18,8 +18,18 @@ _ERRS = {"llm_errors": 0, "rate_limited": 0, "embed_errors": 0}
 _totals = {**_ERRS, "last_error": None}
 
 
+def model() -> str:
+    """LLM_MODEL env wins; otherwise the model_id in config/ai_prompt.yaml (Claude) or a Gemini default."""
+    if config.LLM_MODEL:
+        return config.LLM_MODEL
+    if _anthropic():
+        from app import policy
+        return policy.ai()["model"]["model_id"]
+    return "gemini-flash-latest"
+
+
 def reset_usage() -> None:
-    _usage.set({"llm_calls": 0, "tokens": 0, "model": "mock" if config.MOCK_LLM else config.LLM_MODEL, **_ERRS})
+    _usage.set({"llm_calls": 0, "tokens": 0, "model": "mock" if config.MOCK_LLM else model(), **_ERRS})
 
 
 def usage() -> dict:
@@ -68,26 +78,26 @@ def _headers() -> dict:
 
 
 def _api_anthropic(system: str, user: str, temperature: float, max_tokens: int) -> str:
-    body = {"model": config.LLM_MODEL, "max_tokens": max_tokens, "temperature": temperature, "system": system,
+    body = {"model": model(), "max_tokens": max_tokens, "temperature": temperature, "system": system,
             "messages": [{"role": "user", "content": user}]}
     r = httpx.post(f"{config.ANTHROPIC_BASE_URL}/v1/messages", json=body, timeout=config.LLM_TIMEOUT,
                    headers={**_headers(), "content-type": "application/json"})
     r.raise_for_status()
     d = r.json()
     u = d.get("usage", {})
-    _add(u.get("input_tokens", 0) + u.get("output_tokens", 0), config.LLM_MODEL)
+    _add(u.get("input_tokens", 0) + u.get("output_tokens", 0), model())
     return "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
 
 
 def _api(messages: list[dict], as_json: bool, temperature: float) -> str:
-    body = {"model": config.LLM_MODEL, "messages": messages, "temperature": temperature}
+    body = {"model": model(), "messages": messages, "temperature": temperature}
     if as_json:
         body["response_format"] = {"type": "json_object"}
     r = httpx.post(f"{config.LLM_BASE_URL}/chat/completions", json=body, timeout=config.LLM_TIMEOUT,
                    headers=_headers())
     r.raise_for_status()
     d = r.json()
-    _add(d.get("usage", {}).get("total_tokens", 0), config.LLM_MODEL)
+    _add(d.get("usage", {}).get("total_tokens", 0), model())
     return d["choices"][0]["message"]["content"]
 
 
@@ -143,6 +153,6 @@ def health() -> dict:
         base = f"{config.ANTHROPIC_BASE_URL}/v1" if _anthropic() else config.LLM_BASE_URL
         r = httpx.get(f"{base}/models", timeout=5, headers=_headers())
         r.raise_for_status()
-        return {"status": "ok", "model": config.LLM_MODEL, "ms": int((time.time() - t) * 1000), **_totals}
+        return {"status": "ok", "model": model(), "ms": int((time.time() - t) * 1000), **_totals}
     except Exception as e:
         return {"status": "down", "error": type(e).__name__, **_totals}

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 
-from app import config, db, engage, llm, policy
+from app import config, db, engage, evaluation, llm, policy
 from app.domain import DOMAIN
 
 SUBJECT_HEADER = os.getenv("SUBJECT_HEADER", "X-Customer-Id")
@@ -42,6 +42,12 @@ def health():
     return {"status": "ok" if ok else "degraded", "database": sql, "llm": lm, "domain": DOMAIN.name}
 
 
+@app.get("/audit", dependencies=[Depends(require_admin)])
+def audit_recent(limit: int = 200):
+    """Newest audit rows across all requests, for the console's audit log (evidence left out)."""
+    return engage.audit_recent(max(1, min(limit, 1000)))
+
+
 @app.get("/audit/{trace_id}")
 def audit(trace_id: str, request: Request, x_admin_key: str | None = Header(default=None)):
     """All steps of one request, in order. Same 404 for "not yours" and "does not exist"."""
@@ -54,10 +60,19 @@ def audit(trace_id: str, request: Request, x_admin_key: str | None = Header(defa
 
 @app.get("/policy")
 def get_policy():
-    """What the pipeline runs on: thresholds, offer gates and the AI prompt rules (no prompt text with data)."""
+    """What the pipeline runs on: every rule YAML in config/, the live offer catalogue and the AI writer settings."""
     ai = policy.ai()
-    return {"policy": policy.policy(), "offers": policy.offers(),
-            "ai": {"model": ai["model"], "strategies": ai["strategies"], "placeholders": ai["placeholders"]}}
+    return {"policy": policy.policy(), "segmentation": policy.segmentation(), "conflicts": policy.conflicts(),
+            "offers": policy.offers(), "offer_rules": policy.offer_rules(), "validator": policy.validator(),
+            "catalog": db.q("SELECT * FROM offer_catalog ORDER BY message_type, priority"),
+            "ai": {"model": llm.model(), "temperature": ai["model"]["temperature"],
+                   "tones": {k: v["description"] for k, v in ai["tone_instructions"].items()},
+                   "placeholders": policy.policy()["message"]["locked_placeholders"]}}
+
+
+@app.get("/evaluation", dependencies=[Depends(require_admin)])
+def get_evaluation():
+    return _call(evaluation.summary)
 
 
 # ---------------- UC5 customer engagement: draft, review, mock send (staff only) ----------------

@@ -1,0 +1,144 @@
+# ──────────────────────────────────────────────────────────────
+# UC5 — Message Validator Rules (Step 7)
+# Runs AFTER Claude API generates the draft (step 6).
+# All checks run; each result is audited.
+# ──────────────────────────────────────────────────────────────
+
+execution:
+  mode: run_all                      # every check runs, all results logged
+  audit_each: true
+  on_any_fail: reject_draft          # draft goes back for AI re-generation
+
+checks:
+
+  # ── MV-01: Length bounds ──────────────────────────────────
+  - id: MV-01
+    name: length_check
+    description: "Draft must be between 50 and 800 characters"
+    rule:
+      min_chars: 50
+      max_chars: 800
+    severity: hard_fail
+
+  # ── MV-02: Greeting present ──────────────────────────────
+  - id: MV-02
+    name: greeting_check
+    description: "Draft must open with a greeting addressing the customer"
+    rule:
+      pattern: "^(Hi|Hello|Dear|Good morning|Good afternoon|Good evening)\\b"
+      case_insensitive: true
+    severity: hard_fail
+
+  # ── MV-03: Sign-off present ──────────────────────────────
+  - id: MV-03
+    name: signoff_check
+    description: "Draft must end with a professional sign-off"
+    rule:
+      pattern: "(regards|sincerely|thank you|best wishes|warm regards|kind regards|care team)\\s*$"
+      case_insensitive: true
+    severity: hard_fail
+
+  # ── MV-04: No PII leakage ───────────────────────────────
+  - id: MV-04
+    name: pii_check
+    description: >
+      Draft must NOT contain any PII that was supposed to be dropped
+      in step 1. These fields should never appear in the AI context
+      or the generated output.
+    patterns:
+      phone: "\\+?\\d{10,13}"
+      aadhaar: "\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}"
+      pan: "[A-Z]{5}\\d{4}[A-Z]"
+      address: "(house|flat|street|road|lane|nagar|colony|apt|floor)\\b"
+      card: "\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}"
+      national_id: "national.?id|\\bNIN\\b|\\bSSN\\b"
+      credit_score: "credit.?score|CIBIL|\\b[3-9]\\d{2}\\b"  # 3-digit scores
+      dob: "date.?of.?birth|\\bDOB\\b"
+      gender: "\\b(male|female|gender)\\b"
+    severity: hard_fail
+
+  # ── MV-05: Tone consistency ──────────────────────────────
+  - id: MV-05
+    name: tone_check
+    description: >
+      Draft must not contain words that contradict the assigned tone.
+      AI-generated drafts must match the tone from strategy step.
+    forbidden_words:
+      courteous:
+        - "immediately"
+        - "urgent"
+        - "final notice"
+        - "suspend"
+        - "terminate"
+        - "legal"
+      polite:
+        - "final notice"
+        - "suspend"
+        - "terminate"
+        - "legal"
+      firm:
+        - "no rush"
+        - "whenever convenient"
+        - "take your time"
+      urgent:
+        - "no rush"
+        - "whenever convenient"
+        - "take your time"
+        - "no hurry"
+      warm:
+        - "overdue"
+        - "urgent"
+        - "suspend"
+        - "penalty"
+      celebratory:
+        - "overdue"
+        - "urgent"
+        - "suspend"
+        - "penalty"
+        - "risk"
+      helpful:
+        - "penalty"
+        - "suspend"
+        - "terminate"
+      win-back:
+        - "penalty"
+        - "suspend"
+        - "terminate"
+        - "final notice"
+    severity: hard_fail
+
+  # ── MV-06: Placeholder integrity ─────────────────────────
+  - id: MV-06
+    name: placeholder_integrity_check
+    description: >
+      Locked placeholders must survive the AI generation intact.
+      The AI must output them as literal tokens, not resolve them.
+    sub_checks:
+
+      - id: MV-06a
+        name: placeholder_presence
+        description: "Every placeholder from the input context must appear in the output"
+        rule: "set(input_placeholders) ⊆ set(output_placeholders)"
+
+      - id: MV-06b
+        name: no_injected_currency
+        description: "No currency amounts outside {amount} placeholder"
+        pattern: "(?<!\\{)(Rs\\.?|INR|₹)\\s*\\d"
+
+      - id: MV-06c
+        name: no_injected_dates
+        description: "No date strings outside {due_date} placeholder"
+        pattern: "(?<!\\{)\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|(?<!\\{)(January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{1,2}"
+
+      - id: MV-06d
+        name: no_injected_offer_words
+        description: "No offer details outside {offer_terms} placeholder"
+        pattern: "(?<!\\{)(\\d+\\s*GB|\\d+\\s*points|free data|bonus data|top-?up)"
+        case_insensitive: true
+
+      - id: MV-06e                     # added: diagram step 7 "no injected digits"
+        name: no_injected_digits
+        description: "No digits at all outside placeholders (amounts, dates, points come only from placeholders)"
+        pattern: '[0-9]'
+
+    severity: hard_fail

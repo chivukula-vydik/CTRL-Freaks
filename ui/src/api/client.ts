@@ -1,18 +1,11 @@
 /**
  * API client. Two interchangeable implementations:
- *  - mock: in-browser synthetic data (default, no backend needed)
- *  - http: calls the backend under /api (set VITE_DATA_SOURCE=http)
+ *  - http: calls the FastAPI backend under /api (default; vite proxies /api to it)
+ *  - mock: in-browser synthetic data, no backend needed (set VITE_DATA_SOURCE=mock)
  *
- * Expected backend endpoints (see README for request/response shapes):
- *   GET  /api/queue                       -> { summary, items }
- *   GET  /api/customers/:id/review        -> ReviewCase
- *   GET  /api/customers/:id/blocked       -> BlockedCase
- *   POST /api/customers/:id/revalidate    -> ValidationCheck[]   body: { subject, body }
- *   POST /api/customers/:id/decision      -> DecisionResult      body: ReviewDecision
- *   POST /api/customers/:id/escalate      -> { ticketId }
- *   GET  /api/policy                      -> PolicyConfig
- *   GET  /api/evaluation                  -> EvaluationSummary
- *   GET  /api/audit                       -> AuditEvent[]
+ * Backend endpoints used (adapter in ./backend.ts):
+ *   POST /engage/batch · GET /drafts · GET /drafts/:id · POST /drafts/:id/{edit,approve,reject,send}
+ *   GET /audit · GET /audit/:trace_id · GET /policy · GET /evaluation
  */
 import type {
   AuditEvent,
@@ -117,9 +110,7 @@ const mockApi: Api = {
 };
 
 // ---------------------------------------------------------------- http ---
-// queue / review / decisions hit the backend; policy, evaluation and audit list have no endpoint yet
 const httpApi: Api = {
-  ...mockApi,
   getQueue: backend.getQueue,
   getReviewCase: backend.getReviewCase,
   getBlockedCase: backend.getBlockedCase,
@@ -127,6 +118,9 @@ const httpApi: Api = {
   submitDecision: backend.submitDecision,
   escalate: backend.escalate,
   generate: backend.generate,
+  getPolicy: backend.getPolicy,
+  getEvaluation: backend.getEvaluation,
+  getAudit: backend.getAudit,
 };
 
-export const api: Api = import.meta.env.VITE_DATA_SOURCE === 'http' ? httpApi : mockApi;
+export const api: Api = import.meta.env.VITE_DATA_SOURCE === 'mock' ? mockApi : httpApi;

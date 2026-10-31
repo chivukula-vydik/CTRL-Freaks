@@ -1,7 +1,7 @@
 """Evaluation over data/dataset/ground_truth.csv. Read-only: nothing is written to the database.
     python -m eval.run_eval                 # uses DATABASE_URL and whatever LLM is configured (MOCK_LLM=true = no AI)
 Prints per-step accuracy, a confusion matrix for the primary segment, block-reason accuracy and a groundedness count
-(drafts whose every number and date is in the verified facts), and writes eval/report.md."""
+(drafts that pass every check in config/message_validator_rules.yaml), and writes eval/report.md."""
 import collections
 import os
 import sys
@@ -39,7 +39,7 @@ def main() -> int:
         if not d["blocks"]:
             drafted += 1
             out = engage.generate(d)
-            issues = D.validate(out, d["facts"], d["strategy"], d["offer"], d["ctx"]["snapshot"])
+            issues = D.validate(out, d["facts"], d["strategy"], d["offer"])
             grounded += not issues
             ai += out["source"] == "ai"
             fallback += out["source"] == "fallback"
@@ -54,7 +54,7 @@ def main() -> int:
               table([["expected \\ got"] + blocks] + [[e] + [str(block_cm[(e, p)]) for p in blocks] for e in blocks]), "```",
               "", "## Drafts", "",
               f"- customers with a draft: {drafted}",
-              f"- grounded (every number and date in the verified facts, all checks pass): {grounded}/{drafted}",
+              f"- grounded (all message_validator_rules checks pass, no injected digits/dates/offers): {grounded}/{drafted}",
               f"- written by the AI: {ai}, plain fallback text: {fallback}",
               f"- LLM usage: {llm.usage()}"]
     for k, items in fails.items():

@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
   record        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS audit_log_trace ON audit_log (trace_id, seq);
+-- policy.yaml audit.fields: step_number = seq, rule_id = rule, input_snapshot = evidence, output_snapshot = record
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS template_version TEXT;
 
 CREATE OR REPLACE FUNCTION audit_log_immutable() RETURNS trigger LANGUAGE plpgsql AS $fn$
 BEGIN

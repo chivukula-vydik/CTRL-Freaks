@@ -2,6 +2,7 @@
 6 the AI draft writer, 7 the message validator, 8 human review and 9 the mock outbox.
 Every step writes a row to the insert-only audit_log. Gates 3, 5 and 7 re-run at edit, approve and send."""
 import json
+import re
 import time
 import uuid
 from datetime import date, datetime, timezone
@@ -60,11 +61,11 @@ class Trail:
     def step(self, step: str, rule: str | None = None, evidence=None, model_version: str | None = None, **record):
         self.rows.append((self.tid, len(self.rows) + 1, step, _now(), self.cid, self.actor, rule,
                           _j(evidence) if evidence is not None else None, model_version,
-                          _j({"step": step, **record})))
+                          D.DOMAIN.TEMPLATE_VERSION, _j({"step": step, **record})))
 
     def save(self, c=None) -> str:
         sql = ("INSERT INTO audit_log (trace_id, seq, step, timestamp, customer_id, actor, rule, evidence, "
-               "model_version, record) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)")
+               "model_version, template_version, record) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)")
         if c is not None:
             with c.cursor() as cur:
                 cur.executemany(sql, self.rows)
@@ -79,6 +80,14 @@ def audit_trace(tid: str) -> list[dict]:
     for r in rows:
         r["record"] = json.loads(r["record"])
         r["evidence"] = json.loads(r["evidence"]) if r["evidence"] else None
+    return rows
+
+
+def audit_recent(limit: int) -> list[dict]:
+    rows = db.q("SELECT trace_id, seq, step, timestamp, customer_id, actor, rule, model_version, template_version, record "
+                "FROM audit_log ORDER BY event_id DESC LIMIT ?", (limit,))
+    for r in rows:
+        r["record"] = json.loads(r["record"])
     return rows
 
 
@@ -115,52 +124,80 @@ def _evidence(ctx: dict) -> dict:
 def _applied(d: dict) -> list[dict]:
     pol, out = policy.policy(), []
     for s in d["seg"]["segments"]:
-        node = pol["segments"].get(s["segment"])
-        out.append({"rule_id": f"segments.{s['segment']}", "parameter": s["segment"], "value": node,
-                    "source_doc_id": "config/policy.yaml"})
-    out.append({"rule_id": f"strategies.{d['strategy']['name']}", "parameter": "strategy",
-                "value": pol["strategies"][d["strategy"]["name"]], "source_doc_id": "config/policy.yaml"})
-    out.append({"rule_id": "prechecks", "parameter": "cooldown_days/duplicate_days",
-                "value": {k: pol["prechecks"][k] for k in ("cooldown_days", "duplicate_days")},
-                "source_doc_id": "config/policy.yaml"})
+        out.append({"rule_id": s.get("rule_id") or s["segment"], "parameter": s["segment"],
+                    "value": s.get("rule_text"), "source_doc_id": "config/segmentation_rules.yaml"})
+    out.append({"rule_id": "segmentation.thresholds", "parameter": "thresholds",
+                "value": pol["segmentation"]["thresholds"], "source_doc_id": "config/policy.yaml"})
+    out.append({"rule_id": f"strategy.{d['strategy']['name']}", "parameter": "strategy",
+                "value": {k: d["strategy"][k] for k in ("message_type", "tone", "stage")}, "source_doc_id": "config/policy.yaml"})
+    out.append({"rule_id": "precheck.cooldown_or_duplicate", "parameter": "cooldown_days/duplicate_days",
+                "value": pol["precheck"]["rules"]["cooldown_or_duplicate"], "source_doc_id": "config/policy.yaml"})
     if d["strategy"]["offer"]:
-        out.append({"rule_id": "offers.gates", "parameter": "gates", "value": policy.offers()["gates"],
-                    "source_doc_id": "config/offers.yaml"})
+        out.append({"rule_id": "OV-01..OV-05", "parameter": "gates", "value": policy.offers()["selection"]["gates"],
+                    "source_doc_id": "config/offer_validator_rules.yaml"})
     return out
 
 
 # ---------------------------------------------------------------- step 6: AI draft writer ---------------------
+def prompt(d: dict) -> tuple[str, str]:
+    """System and user prompt from ai_prompt.yaml. Locked placeholders stay literal tokens, so the model never
+    sees a name, amount or date; ids and money are withheld too (the placeholders carry them)."""
+    cfg, st, offer, seg = policy.ai(), d["strategy"], d["offer"], d["seg"]
+    tone = cfg["tone_instructions"].get(st["tone"], {})
+    system = cfg["system_prompt"] + f"\nTONE: {st['tone']} ({tone.get('description', '')})\n{tone.get('guidance', '')}"
+    pay = ""
+    if st["message_type"] in policy.reminder_types():
+        pay = D.fill(cfg["payment_context_template"], {"target_bill_id": "on file", "overdue_days": st["overdue_days"],
+                                                       "strategy": st["name"], "total_outstanding": "on file"})
+    off = cfg["no_offer_instruction"]
+    if offer:
+        off = D.fill(cfg["offer_context_template"], {"offer_id": offer["offer_id"], "offer_description": offer["offer_name"]})
+    user = D.fill(cfg["user_prompt_template"], {
+        "segment": seg["primary"], "message_type": st["message_type"], "strategy": st["name"], "tone": st["tone"],
+        "greeting_name": "{first_name}", "payment_context": pay.strip(), "offer_context": off.strip()})
+    return system, user
+
+
+def fallback_body(st: dict, offer: dict | None) -> str:
+    tpl = policy.ai()["fallback"]["templates"]
+    key = st["message_type"]
+    if key == "reward_offer" and not offer:
+        key = "appreciation"
+    elif key == "appreciation" and offer:
+        key = "reward_offer"
+    body = " ".join(tpl[key].split())
+    return body if offer else re.sub(r"\s*\{offer_terms\}\.?", "", body)
+
+
 def generate(d: dict) -> dict:
-    """Claude writes the whole email around locked placeholders; code fills them after the check.
-    If the AI is down or its text fails a check, the plain fallback text from ai_prompt.yaml is used."""
-    st, offer, f, as_of = d["strategy"], d["offer"], d["facts"], d["ctx"]["snapshot"]
+    """Claude writes the email body around locked placeholders; code fills them, then step 7 checks the result.
+    A failed check sends the draft back to the AI with the reasons (on_any_fail: reject_draft); API errors are
+    retried. After max_retries the rule-based fallback text from ai_prompt.yaml is used."""
+    st, offer, f = d["strategy"], d["offer"], d["facts"]
     cfg = policy.ai()
-    req, allowed = D.allowed_placeholders(st, offer)
-    if "total_amount" not in f:
-        allowed.discard("total_amount")
-    user = json.dumps({
-        "strategy": st["name"], "goal": cfg["strategies"][st["name"]]["goal"], "tone": st["tone"],
-        "language": f["language"], "required_placeholders": sorted(req),
-        "optional_placeholders": sorted(allowed - req), "offer_allowed": bool(offer),
-        "placeholder_meaning": {k: cfg["placeholders"][k] for k in sorted(allowed)}})
-    warnings = []
-    out = llm.chat_json(cfg["system"], user, required=["subject", "body"], temperature=cfg["model"]["temperature"],
-                        max_tokens=cfg["model"]["max_tokens"])
-    if out:
-        subj, body = str(out["subject"]).strip(), str(out["body"]).strip()
-        issues = D.check_placeholders(subj, body, st, offer)
+    fb = cfg["fallback"]
+    subject = D.fill(cfg["subjects"][st["message_type"]], f)
+    system, user = prompt(d)
+    warnings, issues = [], []
+    for _ in range(fb["max_retries"] + 1):
+        errors = llm.usage()["llm_errors"]
+        raw = llm.chat(system, user, temperature=cfg["model"]["temperature"], max_tokens=cfg["model"]["max_tokens"])
+        if raw is None:
+            if llm.usage()["llm_errors"] == errors:   # mock mode or no key: nothing to retry
+                break
+            time.sleep(fb["retry_delay_ms"] / 1000)
+            continue
+        cand = {"subject": subject, "body": D.fill(raw.strip(), f)}
+        issues = D.validate(cand, f, st, offer)
         if not issues:
-            cand = {"subject": D.fill(subj, f), "body": D.fill(body, f)}
-            issues = D.validate(cand, f, st, offer, as_of)
-            if not issues:
-                return {**cand, "source": "ai", "warnings": [], "model": llm.usage()["model"]}
+            return {**cand, "source": "ai", "warnings": [], "model": llm.usage()["model"]}
+        user += "\n\nYour last draft failed these checks, fix them: " + "; ".join(i["detail"] for i in issues)
+    if issues:
         warnings.append({"code": "AI_DRAFT_REJECTED",
                          "detail": "; ".join(i["code"] for i in issues) + ": fallback text used"})
     elif not config.MOCK_LLM:
-        warnings.append({"code": "AI_UNAVAILABLE", "detail": "no usable AI answer (no key, error or invalid JSON): fallback text used"})
-    fb = cfg["fallback"][st["name"]]
-    ff = {**f, "offer_paragraph": D.fill(cfg["offer_paragraph"], f) if offer else ""}
-    return {"subject": D.fill(fb["subject"], ff), "body": D.fill(fb["body"], ff), "source": "fallback",
+        warnings.append({"code": "AI_UNAVAILABLE", "detail": "no usable AI answer (no key or API error): fallback text used"})
+    return {"subject": subject, "body": D.fill(fallback_body(st, offer), f), "source": "fallback",
             "warnings": warnings, "model": "fallback-text"}
 
 
@@ -175,13 +212,13 @@ def run(cid: str, as_of: date | None = None) -> dict:
     d = decide(cid, as_of)
     ctx, seg, st, offer, f = d["ctx"], d["seg"], d["strategy"], d["offer"], d["facts"]
     tr = Trail(cid)
-    tr.step("context", rule="policy.protected_fields (never selected)", evidence=_evidence(ctx),
-            fields_dropped=policy.policy()["protected_fields"])
-    tr.step("segments", rule="; ".join(f"segments.{s['segment']}" for s in seg["segments"]), evidence=seg["segments"],
+    tr.step("context", rule="policy.message.pii_fields_to_drop (never selected)", evidence=_evidence(ctx),
+            fields_dropped=policy.policy()["message"]["pii_fields_to_drop"])
+    tr.step("segments", rule="; ".join(s["rule_id"] for s in seg["segments"]), evidence=seg["segments"],
             primary=seg["primary"], confidence=seg["confidence"])
-    tr.step("prechecks", rule="prechecks.order", evidence=d["blocks"], passed=not d["blocks"])
-    tr.step("strategy", rule=f"strategies.{st['name']}", evidence=st)
-    tr.step("offer", rule="offers.gates", evidence=d["decisions"], chosen=offer["offer_id"] if offer else None)
+    tr.step("prechecks", rule="precheck.order", evidence=d["blocks"], passed=not d["blocks"])
+    tr.step("strategy", rule=f"strategy.{st['name']}", evidence=st)
+    tr.step("offer", rule="offer_validator_rules: OV-01..OV-05", evidence=d["decisions"], chosen=offer["offer_id"] if offer else None)
     blocks, warnings = list(d["blocks"]), []
     draft, source, model = {"subject": "", "body": ""}, None, None
     if not blocks:
@@ -190,14 +227,14 @@ def run(cid: str, as_of: date | None = None) -> dict:
         u = llm.usage()
         tr.step("draft", rule="ai_prompt.yaml", model_version=model, source=source, warnings=warnings,
                 llm_calls=u["llm_calls"], tokens=u["tokens"], llm_errors=u["llm_errors"])
-        blocks = D.validate(draft, f, st, offer, ctx["snapshot"])
-        tr.step("validate", rule="validator: 6 checks + placeholder integrity", evidence=blocks, passed=not blocks)
+        blocks = D.validate(draft, f, st, offer)
+        tr.step("validate", rule="message_validator_rules: MV-01..MV-06", evidence=blocks, passed=not blocks)
     status = "blocked" if blocks else "pending_review"
     did = "D-" + uuid.uuid4().hex[:10]
     checks = {"blocking": blocks, "warnings": warnings, "passed": not blocks}
     seg_doc = {"segments": seg["segments"], "primary": seg["primary"], "confidence": seg["confidence"]}
     now = _now()
-    tr.step("stored", evidence={"draft_id": did, "status": status}, latency_ms=int((time.time() - t0) * 1000))
+    tr.step("stored", evidence={"draft_id": did, "status": status}, status=status, latency_ms=int((time.time() - t0) * 1000))
     with db.conn() as c:
         _x(c, "INSERT INTO drafts (draft_id, customer_id, as_of, segments, strategy, offer_id, facts, subject, body, "
               "checks, status, draft_source, template_version, model, trace_id, created_at, updated_at) "
@@ -236,7 +273,7 @@ def list_drafts(status: str | None = None) -> list[dict]:
 
 
 # ---------------------------------------------------------------- re-run gates -----------------------------------
-PRECHECK_CODES = set(policy.policy()["prechecks"]["order"])
+PRECHECK_CODES = set(policy.policy()["precheck"]["order"])
 
 
 def _recheck(row: dict, subject: str, body: str, gates: set[int]) -> dict:
@@ -252,7 +289,7 @@ def _recheck(row: dict, subject: str, body: str, gates: set[int]) -> dict:
         if failed:
             blocking.append({"code": "offer_no_longer_valid", "detail": f"{offer['offer_id']} fails: {failed}"})
     if 7 in gates:
-        blocking += D.validate({"subject": subject, "body": body}, f, st, offer, as_of)
+        blocking += D.validate({"subject": subject, "body": body}, f, st, offer)
     return {"blocking": blocking, "warnings": (row["checks"] or {}).get("warnings", []),
             "passed": not blocking, "rerun_gates": sorted(gates)}
 
@@ -284,8 +321,7 @@ def approve(did: str, req: NoteRequest, reviewer: str) -> dict:
     row = _load(did)
     if row["status"] != "pending_review":
         raise Refused(409, f"only a draft in pending_review can be approved (status {row['status']})")
-    if (row["strategy"] or {}).get("human_review_required") and policy.policy()["review"]["stage3_requires_note"] \
-            and not req.note.strip():
+    if (row["strategy"] or {}).get("human_review_required") and not req.note.strip():   # policy: human_review_required
         raise Refused(409, "final notices need a reviewer note before approval")
     checks = _recheck(row, row["subject"], row["body"], {3, 5, 7})
     if not checks["passed"]:

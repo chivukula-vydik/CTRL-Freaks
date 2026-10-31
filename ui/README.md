@@ -22,29 +22,33 @@ cp .env.example .env      # optional
 npm run dev               # http://localhost:5173
 ```
 
-By default the app runs on **synthetic mock data** (`src/data/mock.ts`), so it works with no backend.
-Try: open CUS-10231 → *Edit draft* → type "final warning" → *Done editing*. The language check fails
-and approval locks.
+By default the console talks to the **real backend** (FastAPI on `:8000`). The dev server proxies
+`/api/*` to `VITE_BACKEND_URL` and adds `X-Admin-Key` from `ADMIN_KEY` in `.env`, so the key never
+reaches the browser bundle. Set `VITE_DATA_SOURCE=mock` to run on the synthetic data in
+`src/data/mock.ts` with no backend.
 
-## Connect your backend
+## End to end
 
-Set `VITE_DATA_SOURCE=http` in `.env`. The dev server proxies `/api/*` to `VITE_BACKEND_URL`
-(default `http://localhost:8000`, e.g. FastAPI). Endpoints expected by `src/api/client.ts`:
+```bash
+# repo root: .env with DATABASE_URL, ADMIN_KEY (and ANTHROPIC_API_KEY, or MOCK_LLM=true)
+uvicorn app.main:app --port 8000
+# ui/: .env with the same ADMIN_KEY
+npm run dev                # open http://localhost:5173 and press "Generate drafts"
+```
 
-| Method | Path | Returns |
-| --- | --- | --- |
-| GET | `/api/queue` | `{ summary: QueueSummary, items: QueueItem[] }` |
-| GET | `/api/customers/:id/review` | `ReviewCase` (404 if none) |
-| GET | `/api/customers/:id/blocked` | `BlockedCase` (404 if not blocked) |
-| POST | `/api/customers/:id/revalidate` | `ValidationCheck[]` — body `{ subject, body }` |
-| POST | `/api/customers/:id/decision` | `DecisionResult` — body `ReviewDecision` |
-| POST | `/api/customers/:id/escalate` | `{ ticketId }` |
-| GET | `/api/policy` | `PolicyConfig` |
-| GET | `/api/evaluation` | `EvaluationSummary` |
-| GET | `/api/audit` | `AuditEvent[]` |
+`src/api/backend.ts` maps the backend's routes onto the console types:
 
-All shapes are defined in **`src/types.ts`**, which is the data contract. Make your Pydantic
-models match it, or generate one from the other.
+| Console call | Backend route |
+| --- | --- |
+| generate | `POST /engage/batch` (steps 1-7 for every customer) |
+| queue, review case, blocked case | `GET /drafts`, `GET /drafts/:id`, `GET /audit/:trace_id` (step-1 evidence) |
+| revalidate | `POST /drafts/:id/edit` (re-runs gates 5 and 7) |
+| approve / reject | `POST /drafts/:id/approve` + `POST /drafts/:id/send` (re-run gates 3, 5, 7), `POST /drafts/:id/reject` |
+| policy | `GET /policy` (the YAMLs in `config/` plus the offer catalogue) |
+| evaluation | `GET /evaluation` (steps 1-5 vs `data/dataset/ground_truth.csv`, plus review stats) |
+| audit log | `GET /audit` (newest audit rows, evidence left out) |
+
+All console shapes are defined in **`src/types.ts`**; the adapter is the only place that knows the backend's field names.
 
 ### Grounding display
 
@@ -58,7 +62,8 @@ highlights grounded facts in green and policy-controlled blocks in purple.
 - Approve is disabled while any check is `fail`, while editing, or while re-validating.
 - Any reviewer edit triggers `/revalidate` before approval is possible.
 - Blocked cases have no approve path; Send is permanently disabled on that screen.
-- The UI never calls a send endpoint directly. `decision` with `approve` queues to the mock outbox.
+- Send only follows a successful approve: the adapter calls `/send` right after `/approve`, and the
+  backend re-runs gates 3, 5 and 7 before writing the mock outbox row.
 
 ## Project structure
 

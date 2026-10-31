@@ -1,41 +1,174 @@
-# UC5 policy: every threshold the deterministic steps use. Change a number here, not in code.
-# Source of the reference numbers: data/dataset/README.md (answer key is generated from them).
-version: policy-2026-10-27
-segments:
-  priority: [payment_reminder, dormant, declining_activity, loyalty_candidate, consistent]
-  payment_reminder: {due_within_days: 7}
-  dormant: {last_activity_days_gte: 30}
-  declining_activity: {prev_30d_gte: 10, ratio_lte: 0.70}
-  loyalty_candidate:
-    tenure_months_gte: 24
-    tiers: [Gold, Platinum]
-    on_time_ratio_gte: 0.90
-    min_bills_issued_postpaid: 6
-  near_boundary_pct: 10        # within 10% of a threshold: flag near_boundary and lower confidence
-  confidence: {normal: 0.95, near_boundary: 0.70}
-tiers: {gold_points_gte: 2000, platinum_points_gte: 8000}
-strategies:
-  courteous_reminder:     {segment: payment_reminder, message_type: payment_reminder, tone: courteous, stage: 0}
-  overdue_stage_1_polite: {segment: payment_reminder, message_type: overdue_notice, tone: polite, stage: 1, overdue_days: [1, 15]}
-  overdue_stage_2_firm:   {segment: payment_reminder, message_type: overdue_notice, tone: firm and respectful, stage: 2, overdue_days: [16, 30]}
-  overdue_stage_3_final:  {segment: payment_reminder, message_type: overdue_notice, tone: formal and respectful, stage: 3, overdue_days: [31, null], human_review_required: true}
-  winback_friendly:       {segment: dormant, message_type: reengagement_offer, tone: warm and friendly, offer: true}
-  reengagement_helpful:   {segment: declining_activity, message_type: reengagement_offer, tone: helpful, offer: true}
-  reward_celebratory:     {segment: loyalty_candidate, message_type: reward_offer, tone: celebratory, offer: true}
-  appreciation_warm:      {segment: consistent, message_type: appreciation, tone: warm, offer: true}
-reminder_message_types: [payment_reminder, overdue_notice]
-prechecks:
-  # all checks run; the first hit (in this order) is the block reason
-  order: [account_inactive, data_conflict, email_not_allowed, consent_missing, email_undeliverable,
-          dispute_or_complaint_open, payment_arrangement_or_hardship, cooldown_or_duplicate]
-  cooldown_days: 7             # any message sent less than 7 days ago
-  duplicate_days: 14           # same message_type sent less than 14 days ago
-  undeliverable_email_status: [bounced, unverified]
-  final_notice_contact_days: 7
-contacts: {support_phone: "1800-200-3000", dispute_email: "billing-disputes@example.com"}
-# Never selected from the database and never sent to the AI.
-protected_fields: [date_of_birth, gender, home_address, phone, national_id_last4, credit_score]
-blocked_phrases: ["legal action", "court", "police", "blacklist", "credit score", "final warning", "guarantee",
-                  "guaranteed", "risk-free", "act now", "last chance", "no choice", "immediately", "penalty",
-                  "penalties", "threat", "threaten", "you failed to"]
-review: {stage3_requires_note: true}
+# ──────────────────────────────────────────────────────────────
+# UC5 — Master Policy Configuration
+# Aligned to: generate_dataset.py (seed 20261027, snap 2026-10-27)
+# ──────────────────────────────────────────────────────────────
+
+snapshot_date: "2026-10-27"
+version: policy-2026-10-27          # added: shown in the review console and audit
+
+# ─── 1. Segmentation (step 2) ────────────────────────────────
+# First-match-wins in this order. Every matching rule is recorded
+# in all_segments; the primary segment is the first hit.
+segmentation:
+  order:
+    - payment_reminder
+    - dormant
+    - declining_activity
+    - loyalty_candidate
+    - consistent            # default — none of the above
+
+  thresholds:
+    dormant_days: 30                 # last_activity_days >= this
+    decline_pct: 70                  # activity_30d <= this % of prev
+    decline_min_prev: 10             # activity_prev_30d must be >= this
+    loyal_tenure_months: 24          # tenure_months >= this
+    loyal_tiers: ["Gold", "Platinum"]
+    loyal_min_bills: 6               # bills_issued_last_12 >= this
+    loyal_on_time_pct: 90            # on_time_payments / bills >= this %
+    reminder_window_days: 7          # unpaid bill due within this many days
+
+  confidence:
+    near_boundary_pct: 10            # within 10% of any threshold
+    normal: 0.95                     # added: confidence score of a clear match
+    near_boundary: 0.70              # added: confidence score when near_boundary is set
+
+  tier_points:                       # loyalty_tier derived from points
+    Silver: [0, 1999]                # 0 – 1999
+    Gold: [2000, 7999]               # 2000 – 7999
+    Platinum: [8000, null]           # 8000+
+
+# ─── 2. Strategy & message type mapping (step 4) ─────────────
+strategy:
+  consistent: appreciation
+  loyalty_candidate: reward_offer
+  declining_activity: reengagement_offer
+  dormant: reengagement_offer
+
+  names:                             # added: strategy id per non-payment segment (answer key vocabulary)
+    consistent: appreciation_warm
+    loyalty_candidate: reward_celebratory
+    declining_activity: reengagement_helpful
+    dormant: winback_friendly
+
+  payment_stages:
+    # overdue_days = snapshot_date - target_bill.due_date
+    - stage: courteous_reminder
+      message_type: payment_reminder
+      overdue_range: [null, 0]         # due today or upcoming (<=0 days overdue)
+    - stage: overdue_stage_1_polite
+      message_type: overdue_notice
+      overdue_range: [1, 15]
+    - stage: overdue_stage_2_firm
+      message_type: overdue_notice
+      overdue_range: [16, 30]
+    - stage: overdue_stage_3_final
+      message_type: overdue_notice
+      overdue_range: [31, null]        # 31+ days
+      human_review_required: true
+
+# ─── 3. Tone mapping ─────────────────────────────────────────
+tone:
+  appreciation: warm
+  reward_offer: celebratory
+  reengagement_offer: helpful         # declining_activity
+  reengagement_offer_dormant: win-back
+  payment_reminder: courteous
+  overdue_notice_stage_1: polite
+  overdue_notice_stage_2: firm
+  overdue_notice_stage_3: urgent
+
+# ─── 4. Pre-check stop signs (step 3) ────────────────────────
+# All 8 checks run. First hit in this order = primary block reason.
+# All hits recorded in all_block_reasons.
+precheck:
+  order:
+    - account_inactive
+    - data_conflict
+    - email_not_allowed
+    - consent_missing
+    - email_undeliverable
+    - dispute_or_complaint_open
+    - payment_arrangement_or_hardship
+    - cooldown_or_duplicate
+
+  rules:
+    account_inactive:
+      condition: "account_status in ('suspended', 'closed')"
+
+    data_conflict:
+      description: "Facts contradict each other"
+      checks:
+        - PAID_AMOUNT_MISMATCH        # paid but amount_paid != amount_due
+        - PAID_NO_PAYMENT_DATE        # paid but no last_payment_date
+        - UNPAID_BUT_FULLY_PAID       # unpaid but amount_paid >= amount_due
+        - STATUS_DATE_MISMATCH        # overdue but due_date >= snapshot, or due but due_date < snapshot
+        - MISSING_CURRENCY            # empty currency field
+        - ACTIVITY_MISMATCH           # dormant (>=30 days) but activity_30d > 0
+        - TIER_MISMATCH               # loyalty_tier != tier_for(loyalty_points)
+        - PAYMENT_COUNT_MISMATCH      # postpaid: bills_issued_last_12 != actual count
+        - FUTURE_CONSENT_DATE         # consent_updated_at > snapshot_date
+
+    email_not_allowed:
+      condition: "email_allowed == false"
+
+    consent_missing:
+      condition: |
+        payment_reminder segment  → service_consent == false
+        all other segments        → marketing_consent == false
+
+    email_undeliverable:
+      condition: "email_address is empty OR email_status != 'valid'"
+
+    dispute_or_complaint_open:
+      condition: "any bill has dispute_open == true OR open_complaint == true"
+
+    payment_arrangement_or_hardship:
+      applies_to: payment_reminder    # only for payment segment
+      condition: "any unpaid bill has payment_arrangement_active == true OR hardship_flag == true"
+
+    cooldown_or_duplicate:
+      cooldown_days: 7                # any message sent < 7 days ago
+      duplicate_days: 14              # same message_type sent < 14 days ago
+
+# ─── 5. Offer selection (step 5) ─────────────────────────────
+offer_selection:
+  repeat_guard_days: 90               # same offer_id not sent in last 90 days
+  no_offer_action: send_without_offer # if no offer passes, still send the message
+  blocked_customers: no_offer         # blocked = no offer assigned
+
+# ─── 6. Message constraints ──────────────────────────────────
+message:
+  min_length: 50
+  max_length: 800
+  max_sentences: 8
+
+  locked_placeholders:
+    - "{first_name}"
+    - "{amount}"
+    - "{due_date}"
+    - "{offer_terms}"
+    - "{loyalty_points}"
+    - "{plan_name}"
+
+  pii_fields_to_drop:               # step 1 must remove these from context
+    - date_of_birth
+    - gender
+    - home_address
+    - phone
+    - national_id_last4
+    - credit_score
+
+# ─── 7. Audit log (step 9) ───────────────────────────────────
+audit:
+  table: audit_log
+  immutability: "REVOKE UPDATE, DELETE + BEFORE UPDATE OR DELETE trigger"
+  fields:
+    - step_number
+    - rule_id
+    - input_snapshot
+    - output_snapshot
+    - evidence
+    - template_version
+    - model_version
+    - actor
+    - timestamp

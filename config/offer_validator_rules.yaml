@@ -1,0 +1,69 @@
+# ──────────────────────────────────────────────────────────────
+# UC5 — Offer Validator Rules (Step 5)
+# Aligned to: generate_dataset.py select_offer()
+# Tries offers in priority order. First to pass all 5 gates wins.
+# ──────────────────────────────────────────────────────────────
+
+execution:
+  mode: first_pass_wins
+  on_none_pass: send_without_offer   # message still sent, just no offer
+  blocked_customers: skip            # do not assign offers to blocked customers
+
+gates:
+
+  # ── Gate 1: Segment + plan_type eligibility ───────────────
+  - id: OV-01
+    name: group_check
+    description: >
+      Customer's primary segment must be in the offer's
+      eligible_segments list. Plan type must match (or offer
+      allows 'any').
+    checks:
+      - "customer.segment IN offer.eligible_segments"
+      - "offer.plan_type == 'any' OR offer.plan_type == customer.plan_type"
+
+  # ── Gate 2: Date validity ─────────────────────────────────
+  - id: OV-02
+    name: expiry_check
+    description: >
+      Offer must be currently valid: valid_from <= snapshot_date
+      and snapshot_date <= expiry_date.
+    checks:
+      - "offer.valid_from <= snapshot_date"
+      - "snapshot_date <= offer.expiry_date"
+    traps:
+      - "OFR-REE-EXP: expired 2026-10-20 (before snapshot)"
+      - "OFR-REE-FUT: valid_from 2026-11-15 (after snapshot)"
+
+  # ── Gate 3: Channel compatibility ─────────────────────────
+  - id: OV-03
+    name: channel_check
+    description: >
+      Offer channel must be 'any' or 'email' (our pipeline is
+      email-only). SMS-only offers must be rejected.
+    checks:
+      - "offer.channel IN ('any', 'email')"
+    allowed: [any, email]            # added: machine-readable form of the check above
+    traps:
+      - "OFR-RWD-SMS: channel = sms, must never be picked"
+
+  # ── Gate 4: Tenure requirement ────────────────────────────
+  - id: OV-04
+    name: tenure_check
+    description: >
+      Customer tenure_months must meet or exceed the offer's
+      min_tenure_months requirement.
+    checks:
+      - "customer.tenure_months >= offer.min_tenure_months"
+    traps:
+      - "OFR-RWD-500: requires min_tenure_months = 36"
+
+  # ── Gate 5: Repeat guard ──────────────────────────────────
+  - id: OV-05
+    name: repeat_guard
+    description: >
+      The same offer_id must not have been sent to this customer
+      in the last 90 days (checked against contact_history).
+    checks:
+      - "no record in contact_history with same offer_id sent within 90 days of snapshot_date"
+    days: 90

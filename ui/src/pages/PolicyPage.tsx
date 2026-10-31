@@ -134,7 +134,7 @@ export default function PolicyPage() {
                 ))}
               </ol>
               <p style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.6 }}>
-                Every stage must include a support and dispute path. Stage 2+ is suppressed while a dispute is open.
+                Every stage is blocked at the pre-check while a dispute, complaint, payment arrangement or hardship flag is open.
               </p>
             </section>
           </div>
@@ -142,7 +142,7 @@ export default function PolicyPage() {
           <div className="columns">
             <section className="card" style={{ flex: '1 1 380px', minWidth: 0, gap: 12 }} aria-labelledby="disc-h">
               <h2 id="disc-h" className="card-title">
-                Required disclaimers
+                Message validator (step 7)
               </h2>
               <ul className="list-plain" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {p.disclaimers.map((d) => (
@@ -156,7 +156,7 @@ export default function PolicyPage() {
             <section className="card" style={{ flex: '1 1 380px', minWidth: 0, gap: 12 }} aria-labelledby="blk-h">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                 <h2 id="blk-h" className="card-title">
-                  Blocked language
+                  Tone-forbidden words &amp; patterns
                 </h2>
                 <span className="footnote">
                   {p.blockedPhraseCount} phrases · {p.blockedPatternCount} patterns

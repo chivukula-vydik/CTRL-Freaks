@@ -1,12 +1,140 @@
-# Offer validator (step 5). Offers come from the offer_catalog table; this file holds the gates.
-selection: first_pass_wins        # offers of the matching message_type are tried in priority order
-gates: [group, expiry, channel, tenure, repeat]
-channels_allowed: [email, any]
-plan_any: any
-repeat_guard_days: 90             # same offer_id not sent in the last 90 days
-value_formats:                    # how an offer is shown to the customer (the AI never writes these)
+# ──────────────────────────────────────────────────────────────
+# UC5 — Offer Catalogue (Step 5 input)
+# Aligned to: generate_dataset.py OFFERS list & offer_catalog.csv
+# Selection: first offer in priority order that passes all 5 gates.
+# ──────────────────────────────────────────────────────────────
+
+selection:
+  mode: first_pass_wins              # try offers in priority order
+  gates: [group, expiry, channel, tenure, repeat_guard]
+  repeat_guard_days: 90              # same offer_id not sent in last 90 days
+  no_offer_action: send_without_offer
+  source: offer_catalog               # added: the pipeline reads offers from the offer_catalog table; the list
+                                      # below mirrors data/dataset/offer_catalog.csv (a test keeps them equal)
+
+value_formats:                       # added: how {offer_terms} shows an offer's value (the AI never writes it)
   INR_bill_credit: "INR {value} bill credit"
   INR_cashback: "INR {value} cashback"
   loyalty_points: "{value} loyalty points"
   GB_data_30d: "{value} GB of data for 30 days"
   GB_data_7d: "{value} GB of data for 7 days"
+
+offers:
+
+  # ── Reward offers (loyalty_candidate) ───────────────────
+
+  - offer_id: OFR-RWD-SMS
+    name: "Loyalty SMS bonus"
+    message_type: reward_offer
+    eligible_segments: [loyalty_candidate]
+    plan_type: any
+    channel: sms                     # TRAP: SMS only, never picked for the email pipeline
+    valid_from: "2026-09-01"
+    expiry_date: "2026-12-31"
+    min_tenure_months: 12
+    priority: 1
+    value: "200"
+    value_unit: loyalty_points
+    terms_text: "Credited within 48 hours."
+
+  - offer_id: OFR-RWD-500
+    name: "Loyalty bill credit"
+    message_type: reward_offer
+    eligible_segments: [loyalty_candidate]
+    plan_type: postpaid              # postpaid only
+    channel: email
+    valid_from: "2026-10-01"
+    expiry_date: "2026-12-31"
+    min_tenure_months: 36            # TRAP: needs 36 months
+    priority: 2
+    value: "100.00"
+    value_unit: INR_bill_credit
+    terms_text: "Applied to next bill. One per account."
+
+  - offer_id: OFR-RWD-2GB
+    name: "Loyalty data gift"
+    message_type: reward_offer
+    eligible_segments: [loyalty_candidate]
+    plan_type: any
+    channel: email
+    valid_from: "2026-07-01"
+    expiry_date: "2026-11-30"
+    min_tenure_months: 24
+    priority: 3
+    value: "2"
+    value_unit: GB_data_30d
+    terms_text: "Valid 30 days from activation."
+
+  # ── Re-engagement offers (declining_activity, dormant) ───
+
+  - offer_id: OFR-REE-EXP
+    name: "Come-back data pack (expired)"
+    message_type: reengagement_offer
+    eligible_segments: [declining_activity, dormant]
+    plan_type: any
+    channel: email
+    valid_from: "2026-07-01"
+    expiry_date: "2026-10-20"        # TRAP: expired before the snapshot
+    min_tenure_months: 0
+    priority: 1
+    value: "5"
+    value_unit: GB_data_7d
+    terms_text: "Valid 7 days from activation."
+
+  - offer_id: OFR-REE-FUT
+    name: "Festive re-engagement (not yet live)"
+    message_type: reengagement_offer
+    eligible_segments: [declining_activity]
+    plan_type: any
+    channel: email
+    valid_from: "2026-11-15"         # TRAP: not yet valid at the snapshot
+    expiry_date: "2026-12-31"
+    min_tenure_months: 0
+    priority: 2
+    value: "10"
+    value_unit: GB_data_7d
+    terms_text: "Valid 7 days from activation."
+
+  - offer_id: OFR-REE-PRE
+    name: "Prepaid recharge cashback"
+    message_type: reengagement_offer
+    eligible_segments: [dormant]
+    plan_type: prepaid               # prepaid only
+    channel: email
+    valid_from: "2026-08-01"
+    expiry_date: "2026-11-30"
+    min_tenure_months: 0
+    priority: 3
+    value: "50.00"
+    value_unit: INR_cashback
+    terms_text: "On next recharge of 199 or more."
+
+  - offer_id: OFR-REE-3GB
+    name: "Re-engagement data pack"
+    message_type: reengagement_offer
+    eligible_segments: [declining_activity, dormant]
+    plan_type: any
+    channel: email
+    valid_from: "2026-07-01"
+    expiry_date: "2026-12-15"
+    min_tenure_months: 3
+    priority: 4
+    value: "3"
+    value_unit: GB_data_7d
+    terms_text: "Valid 7 days from activation."
+
+  # ── Appreciation offers (consistent) ────────────────────
+
+  - offer_id: OFR-APP-1GB
+    name: "Thank-you data"
+    message_type: appreciation
+    eligible_segments: [consistent]
+    plan_type: any
+    channel: email
+    valid_from: "2026-07-01"
+    expiry_date: "2026-12-31"
+    min_tenure_months: 6
+    priority: 1
+    value: "1"
+    value_unit: GB_data_30d
+    terms_text: "Valid 30 days from activation."

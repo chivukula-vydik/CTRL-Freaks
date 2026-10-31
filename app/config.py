@@ -33,7 +33,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
 LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("GEMINI_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-5-5" if LLM_PROVIDER == "anthropic" else "gemini-flash-latest")
+LLM_MODEL = os.getenv("LLM_MODEL", "")   # empty: config/ai_prompt.yaml model.model_id (see llm.model())
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
 MOCK_LLM = _b("MOCK_LLM")
 

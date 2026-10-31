@@ -1,4 +1,5 @@
-"""Loads config/policy.yaml, config/offers.yaml and config/ai_prompt.yaml (cached). Edit the YAML, not the code."""
+"""Loads the UC5 config YAMLs from config/ (cached). Edit the YAML, not the code.
+policy.yaml is the master; the *_rules.yaml files hold the per-step rule detail."""
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -25,6 +26,26 @@ def offers() -> dict:
 
 def ai() -> dict:
     return _load("ai_prompt")
+
+
+def segmentation() -> dict:
+    return _load("segmentation_rules")
+
+
+def conflicts() -> dict:
+    return _load("data_conflict_rules")
+
+
+def offer_rules() -> dict:
+    return _load("offer_validator_rules")
+
+
+def validator() -> dict:
+    return _load("message_validator_rules")
+
+
+def reminder_types() -> set[str]:
+    return {s["message_type"] for s in policy()["strategy"]["payment_stages"]}
 
 
 def reload() -> None:

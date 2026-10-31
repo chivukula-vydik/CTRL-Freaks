@@ -48,6 +48,6 @@ payment_arrangement_or_hardship  0                 0                0           
 ## Drafts
 
 - customers with a draft: 149
-- grounded (every number and date in the verified facts, all checks pass): 149/149
+- grounded (all message_validator_rules checks pass, no injected digits/dates/offers): 149/149
 - written by the AI: 0, plain fallback text: 149
 - LLM usage: {'llm_calls': 0, 'tokens': 0, 'model': 'mock', 'llm_errors': 0, 'rate_limited': 0, 'embed_errors': 0}
