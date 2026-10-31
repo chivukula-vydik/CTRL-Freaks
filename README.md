@@ -9,6 +9,11 @@ API) or the Claude API · React 18 + Vite + TypeScript review console · Docker 
 
 ## Pipeline
 
+![UC5 pipeline v2 design: nine steps, the AI draft writer at step 6, re-run gates at steps 3, 5 and 7](yamlfiles/uc5-config-v2/uc5-pipeline-v2.png)
+
+*Design diagram (v2). As built, data access uses psycopg 3 rather than SQLAlchemy, and the live run uses Gemini;
+the Claude API is a config switch (`LLM_PROVIDER`).*
+
 | Step | What it does | Code / config |
 |---|---|---|
 | 1 Context builder | Loads permitted facts only; the six PII test fields are never selected | `app/domain/engage.py` `context()` |

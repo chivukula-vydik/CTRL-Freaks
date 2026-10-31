@@ -4,6 +4,10 @@ React + TypeScript + Vite frontend for the **Customer Loyalty and Engagement Ass
 It is the human-review layer (FR-08) on top of a backend that does classification, deterministic
 policy checks and LLM drafting. Nothing is sent without a reviewer approving it.
 
+The console is step 8 of the pipeline:
+
+![UC5 pipeline v2 design: the review screen is step 8, between the message validator and the mock outbox](../yamlfiles/uc5-config-v2/uc5-pipeline-v2.png)
+
 ## Screens
 
 | Route | Screen | Covers |
