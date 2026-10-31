@@ -27,13 +27,14 @@ DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
 
 # Supabase Postgres. On Vercel use the transaction pooler URI (port 6543)
 DATABASE_URL = os.getenv("DATABASE_URL", "")
-# LLM + embeddings: any OpenAI-compatible endpoint, Gemini by default
+# LLM provider: "anthropic" (Claude API, default) or "openai" (any OpenAI-compatible endpoint, e.g. Gemini)
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
 LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("GEMINI_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-flash-latest")
+LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-5-5" if LLM_PROVIDER == "anthropic" else "gemini-flash-latest")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
 MOCK_LLM = _b("MOCK_LLM")
 
-ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()
-if not ADMIN_KEY:  # no default: a key in the repo would be a public admin key on Vercel
-    raise RuntimeError("ADMIN_KEY is not set. Set it in .env locally or in the Vercel project env.")
+ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()   # empty = every staff endpoint refuses (require_admin)

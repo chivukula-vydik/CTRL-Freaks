@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 
-from app import config, db, engage, llm
+from app import config, db, engage, llm, policy
 from app.domain import DOMAIN
 
 SUBJECT_HEADER = os.getenv("SUBJECT_HEADER", "X-Customer-Id")
@@ -17,7 +17,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="UC5 Engagement Assistant", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="UC5 Engagement Assistant", version="0.2.0", lifespan=lifespan)
 
 
 def subject(request: Request) -> str | None:
@@ -25,8 +25,12 @@ def subject(request: Request) -> str | None:
     return v.strip().upper() if v and v.strip() else None
 
 
+def _is_admin(key: str | None) -> bool:
+    return bool(config.ADMIN_KEY) and key == config.ADMIN_KEY   # no key configured = nobody is admin
+
+
 def require_admin(x_admin_key: str | None = Header(default=None)) -> None:
-    if x_admin_key != config.ADMIN_KEY:
+    if not _is_admin(x_admin_key):
         raise HTTPException(403, "admin key required")
 
 
@@ -40,19 +44,20 @@ def health():
 
 @app.get("/audit/{trace_id}")
 def audit(trace_id: str, request: Request, x_admin_key: str | None = Header(default=None)):
-    row = db.q1("SELECT * FROM audit_log WHERE trace_id = ?", (trace_id,))
+    """All steps of one request, in order. Same 404 for "not yours" and "does not exist"."""
+    steps = engage.audit_trace(trace_id)
     sid = subject(request)
-    is_admin = x_admin_key == config.ADMIN_KEY
-    # same 404 for "not yours" and "does not exist"
-    if not row or not (is_admin or (sid and row["customer_id"] == sid) or
-                       (row["customer_id"] is None and sid is None)):
+    if not steps or not (_is_admin(x_admin_key) or (sid and steps[0]["customer_id"] == sid)):
         raise HTTPException(404, "audit record not found")
-    return json.loads(row["record"])
+    return {"trace_id": trace_id, "steps": steps}
 
 
-@app.get("/rules")
-def rules():
-    return db.q("SELECT * FROM rule_registry ORDER BY parameter, effective_from")
+@app.get("/policy")
+def get_policy():
+    """What the pipeline runs on: thresholds, offer gates and the AI prompt rules (no prompt text with data)."""
+    ai = policy.ai()
+    return {"policy": policy.policy(), "offers": policy.offers(),
+            "ai": {"model": ai["model"], "strategies": ai["strategies"], "placeholders": ai["placeholders"]}}
 
 
 # ---------------- UC5 customer engagement: draft, review, mock send (staff only) ----------------

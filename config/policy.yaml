@@ -1,0 +1,41 @@
+# UC5 policy: every threshold the deterministic steps use. Change a number here, not in code.
+# Source of the reference numbers: data/dataset/README.md (answer key is generated from them).
+version: policy-2026-10-27
+segments:
+  priority: [payment_reminder, dormant, declining_activity, loyalty_candidate, consistent]
+  payment_reminder: {due_within_days: 7}
+  dormant: {last_activity_days_gte: 30}
+  declining_activity: {prev_30d_gte: 10, ratio_lte: 0.70}
+  loyalty_candidate:
+    tenure_months_gte: 24
+    tiers: [Gold, Platinum]
+    on_time_ratio_gte: 0.90
+    min_bills_issued_postpaid: 6
+  near_boundary_pct: 10        # within 10% of a threshold: flag near_boundary and lower confidence
+  confidence: {normal: 0.95, near_boundary: 0.70}
+tiers: {gold_points_gte: 2000, platinum_points_gte: 8000}
+strategies:
+  courteous_reminder:     {segment: payment_reminder, message_type: payment_reminder, tone: courteous, stage: 0}
+  overdue_stage_1_polite: {segment: payment_reminder, message_type: overdue_notice, tone: polite, stage: 1, overdue_days: [1, 15]}
+  overdue_stage_2_firm:   {segment: payment_reminder, message_type: overdue_notice, tone: firm and respectful, stage: 2, overdue_days: [16, 30]}
+  overdue_stage_3_final:  {segment: payment_reminder, message_type: overdue_notice, tone: formal and respectful, stage: 3, overdue_days: [31, null], human_review_required: true}
+  winback_friendly:       {segment: dormant, message_type: reengagement_offer, tone: warm and friendly, offer: true}
+  reengagement_helpful:   {segment: declining_activity, message_type: reengagement_offer, tone: helpful, offer: true}
+  reward_celebratory:     {segment: loyalty_candidate, message_type: reward_offer, tone: celebratory, offer: true}
+  appreciation_warm:      {segment: consistent, message_type: appreciation, tone: warm, offer: true}
+reminder_message_types: [payment_reminder, overdue_notice]
+prechecks:
+  # all checks run; the first hit (in this order) is the block reason
+  order: [account_inactive, data_conflict, email_not_allowed, consent_missing, email_undeliverable,
+          dispute_or_complaint_open, payment_arrangement_or_hardship, cooldown_or_duplicate]
+  cooldown_days: 7             # any message sent less than 7 days ago
+  duplicate_days: 14           # same message_type sent less than 14 days ago
+  undeliverable_email_status: [bounced, unverified]
+  final_notice_contact_days: 7
+contacts: {support_phone: "1800-200-3000", dispute_email: "billing-disputes@example.com"}
+# Never selected from the database and never sent to the AI.
+protected_fields: [date_of_birth, gender, home_address, phone, national_id_last4, credit_score]
+blocked_phrases: ["legal action", "court", "police", "blacklist", "credit score", "final warning", "guarantee",
+                  "guaranteed", "risk-free", "act now", "last chance", "no choice", "immediately", "penalty",
+                  "penalties", "threat", "threaten", "you failed to"]
+review: {stage3_requires_note: true}

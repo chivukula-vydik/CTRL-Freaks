@@ -1,0 +1,12 @@
+# Offer validator (step 5). Offers come from the offer_catalog table; this file holds the gates.
+selection: first_pass_wins        # offers of the matching message_type are tried in priority order
+gates: [group, expiry, channel, tenure, repeat]
+channels_allowed: [email, any]
+plan_any: any
+repeat_guard_days: 90             # same offer_id not sent in the last 90 days
+value_formats:                    # how an offer is shown to the customer (the AI never writes these)
+  INR_bill_credit: "INR {value} bill credit"
+  INR_cashback: "INR {value} cashback"
+  loyalty_points: "{value} loyalty points"
+  GB_data_30d: "{value} GB of data for 30 days"
+  GB_data_7d: "{value} GB of data for 7 days"

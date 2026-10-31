@@ -1,4 +1,4 @@
-"""LLM client: any OpenAI-compatible endpoint (Gemini by default), MOCK_LLM for offline runs.
+"""LLM client: Claude API (default) or any OpenAI-compatible endpoint (LLM_PROVIDER=openai), MOCK_LLM for offline runs.
 
 Every caller must have a deterministic fallback for when this returns None.
 The LLM never produces authoritative numbers; it classifies and phrases.
@@ -53,8 +53,30 @@ def _fail(kind: str, e: Exception) -> None:
     _totals["last_error"] = f"{kind}: {'429' if limited else type(e).__name__}"
 
 
+def _anthropic() -> bool:
+    return config.LLM_PROVIDER == "anthropic"
+
+
+def _key() -> str:
+    return config.ANTHROPIC_API_KEY if _anthropic() else config.LLM_API_KEY
+
+
 def _headers() -> dict:
+    if _anthropic():
+        return {"x-api-key": config.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"}
     return {"Authorization": f"Bearer {config.LLM_API_KEY}"}
+
+
+def _api_anthropic(system: str, user: str, temperature: float, max_tokens: int) -> str:
+    body = {"model": config.LLM_MODEL, "max_tokens": max_tokens, "temperature": temperature, "system": system,
+            "messages": [{"role": "user", "content": user}]}
+    r = httpx.post(f"{config.ANTHROPIC_BASE_URL}/v1/messages", json=body, timeout=config.LLM_TIMEOUT,
+                   headers={**_headers(), "content-type": "application/json"})
+    r.raise_for_status()
+    d = r.json()
+    u = d.get("usage", {})
+    _add(u.get("input_tokens", 0) + u.get("output_tokens", 0), config.LLM_MODEL)
+    return "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
 
 
 def _api(messages: list[dict], as_json: bool, temperature: float) -> str:
@@ -69,11 +91,13 @@ def _api(messages: list[dict], as_json: bool, temperature: float) -> str:
     return d["choices"][0]["message"]["content"]
 
 
-def chat(system: str, user: str, as_json: bool = False, temperature: float = 0.0) -> str | None:
-    if config.MOCK_LLM or not config.LLM_API_KEY:
+def chat(system: str, user: str, as_json: bool = False, temperature: float = 0.0, max_tokens: int = 700) -> str | None:
+    if config.MOCK_LLM or not _key():
         return None
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     try:
+        if _anthropic():
+            return _api_anthropic(system, user, temperature, max_tokens)
         return _api(msgs, as_json, temperature)
     except Exception as e:
         _fail("llm_errors", e)
@@ -91,11 +115,12 @@ def embed(texts: list[str]) -> list[list[float]]:
     return [x["embedding"] for x in r.json()["data"]]  # input order; Gemini omits "index"
 
 
-def chat_json(system: str, user: str, required: list[str] | None = None, retries: int = 2) -> dict | None:
+def chat_json(system: str, user: str, required: list[str] | None = None, retries: int = 2,
+              temperature: float = 0.0, max_tokens: int = 700) -> dict | None:
     """JSON output with validation + retry. Local 7-8B models do drift."""
     hint = ""
     for _ in range(retries + 1):
-        raw = chat(system + hint, user, as_json=True)
+        raw = chat(system + hint, user, as_json=True, temperature=temperature, max_tokens=max_tokens)
         if raw is None:
             return None
         try:
@@ -111,11 +136,12 @@ def chat_json(system: str, user: str, required: list[str] | None = None, retries
 def health() -> dict:
     if config.MOCK_LLM:
         return {"status": "mock", **_totals}
-    if not config.LLM_API_KEY:
+    if not _key():
         return {"status": "no_api_key", **_totals}
     t = time.time()
     try:
-        r = httpx.get(f"{config.LLM_BASE_URL}/models", timeout=5, headers=_headers())
+        base = f"{config.ANTHROPIC_BASE_URL}/v1" if _anthropic() else config.LLM_BASE_URL
+        r = httpx.get(f"{base}/models", timeout=5, headers=_headers())
         r.raise_for_status()
         return {"status": "ok", "model": config.LLM_MODEL, "ms": int((time.time() - t) * 1000), **_totals}
     except Exception as e:

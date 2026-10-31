@@ -34,12 +34,42 @@ CREATE TABLE IF NOT EXISTS source_register (
   ingested_at      TEXT
 );
 
+-- Audit log: one row per pipeline step. Insert-only: a trigger refuses UPDATE and DELETE, and the API roles
+-- lose the privileges. (An older single-record audit_log must be renamed first: supabase/audit_log.sql.)
 CREATE TABLE IF NOT EXISTS audit_log (
-  trace_id    TEXT PRIMARY KEY,
-  timestamp   TEXT NOT NULL,
-  customer_id TEXT,
-  record      TEXT NOT NULL
+  event_id      BIGSERIAL PRIMARY KEY,
+  trace_id      TEXT NOT NULL,
+  seq           INTEGER NOT NULL,
+  step          TEXT NOT NULL,
+  timestamp     TEXT NOT NULL,
+  customer_id   TEXT,
+  actor         TEXT NOT NULL,
+  rule          TEXT,
+  evidence      TEXT,
+  model_version TEXT,
+  record        TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS audit_log_trace ON audit_log (trace_id, seq);
+
+CREATE OR REPLACE FUNCTION audit_log_immutable() RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+  RAISE EXCEPTION 'audit_log is insert-only: % is not allowed', TG_OP;
+END
+$fn$;
+DROP TRIGGER IF EXISTS audit_log_no_change ON audit_log;
+CREATE TRIGGER audit_log_no_change BEFORE UPDATE OR DELETE ON audit_log
+  FOR EACH ROW EXECUTE FUNCTION audit_log_immutable();
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM PUBLIC;
+DO $do$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM anon';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM authenticated';
+  END IF;
+END
+$do$;
 
 -- state-changing tool calls (@action). payload = what is needed to run it again on confirm
 CREATE TABLE IF NOT EXISTS actions (
