@@ -32,7 +32,7 @@ export interface Api {
   getPolicy(): Promise<PolicyConfig>;
   getEvaluation(): Promise<EvaluationSummary>;
   getAudit(): Promise<AuditEvent[]>;
-  generate(): Promise<void>;
+  generate(onChunk?: (done: number, remaining: number) => void): Promise<void>;
 }
 
 // ---------------------------------------------------------------- mock ---

@@ -30,12 +30,13 @@ export function Sidebar({ queueCount, targets }: Props) {
 
       {links(targets).map((l) => (
         <NavLink
-          key={l.to}
+          key={l.label}
           to={l.to}
           end={l.end}
           className={({ isActive }) => {
             const onSection = l.match ? pathname.startsWith(l.match) : false;
-            return 'nav-link' + (isActive || onSection ? ' active' : '');
+            // review/blocked links point at '/' until the queue loads; they must not light up with the queue
+            return 'nav-link' + ((isActive && (l.end || l.to !== '/')) || onSection ? ' active' : '');
           }}
         >
           <Icon name={l.icon} />

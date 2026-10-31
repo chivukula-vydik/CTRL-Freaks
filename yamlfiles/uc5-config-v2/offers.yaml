@@ -1,0 +1,115 @@
+# ──────────────────────────────────────────────────────────────
+# UC5 — Offer Catalogue (Step 5 input)
+# Aligned to: generate_dataset.py OFFERS list & offer_catalog.csv
+# Selection: first offer in priority order that passes all 5 gates.
+# ──────────────────────────────────────────────────────────────
+
+selection:
+  mode: first_pass_wins              # try offers in priority order
+  gates: [group, expiry, channel, tenure, repeat_guard]
+  repeat_guard_days: 90              # same offer_id not sent in last 90 days
+  no_offer_action: send_without_offer
+
+offers:
+
+  # ── Reward offers (loyalty_candidate) ─────────────────────
+
+  - offer_id: OFR-RWD-SMS
+    name: "200 bonus loyalty points (SMS-only)"
+    description: "200 bonus loyalty points — SMS channel only"
+    eligible_segments: [loyalty_candidate]
+    plan_type: any
+    channel: sms                     # TRAP: must never be picked for email pipeline
+    valid_from: "2026-01-01"
+    expiry_date: "2027-01-01"
+    min_tenure_months: 0
+    priority: 1
+    terms_text: "200 bonus loyalty points credited within 48 hours"
+
+  - offer_id: OFR-RWD-500
+    name: "500 bonus loyalty points"
+    description: "500 bonus loyalty points for long-tenure postpaid"
+    eligible_segments: [loyalty_candidate]
+    plan_type: postpaid              # TRAP: postpaid only
+    channel: any
+    valid_from: "2026-01-01"
+    expiry_date: "2027-01-01"
+    min_tenure_months: 36            # TRAP: requires 36 months tenure
+    priority: 2
+    terms_text: "500 bonus loyalty points credited within 48 hours"
+
+  - offer_id: OFR-RWD-2GB
+    name: "Free 2 GB data add-on"
+    description: "Free 2 GB data add-on for loyal customers"
+    eligible_segments: [loyalty_candidate]
+    plan_type: any
+    channel: any
+    valid_from: "2026-01-01"
+    expiry_date: "2027-01-01"
+    min_tenure_months: 0
+    priority: 3
+    terms_text: "Free 2 GB data add-on valid for 30 days"
+
+  # ── Re-engagement offers (declining_activity, dormant) ────
+
+  - offer_id: OFR-REE-EXP
+    name: "Expired re-engagement offer"
+    description: "3 GB data — EXPIRED"
+    eligible_segments: [declining_activity, dormant]
+    plan_type: any
+    channel: any
+    valid_from: "2026-06-01"
+    expiry_date: "2026-10-20"        # TRAP: expired before snapshot
+    min_tenure_months: 0
+    priority: 1
+    terms_text: "3 GB free data add-on valid for 30 days"
+
+  - offer_id: OFR-REE-FUT
+    name: "Future re-engagement offer"
+    description: "5 GB data — not yet live"
+    eligible_segments: [declining_activity, dormant]
+    plan_type: any
+    channel: any
+    valid_from: "2026-11-15"         # TRAP: not yet valid at snapshot
+    expiry_date: "2027-03-01"
+    min_tenure_months: 0
+    priority: 2
+    terms_text: "5 GB free data add-on valid for 30 days"
+
+  - offer_id: OFR-REE-PRE
+    name: "Re-engagement prepaid top-up"
+    description: "Free prepaid top-up for re-engagement"
+    eligible_segments: [declining_activity, dormant]
+    plan_type: prepaid               # prepaid only
+    channel: any
+    valid_from: "2026-01-01"
+    expiry_date: "2027-01-01"
+    min_tenure_months: 0
+    priority: 3
+    terms_text: "Free prepaid top-up of 100 INR"
+
+  - offer_id: OFR-REE-3GB
+    name: "Free 3 GB data add-on"
+    description: "3 GB data for re-engagement — general"
+    eligible_segments: [declining_activity, dormant]
+    plan_type: any
+    channel: any
+    valid_from: "2026-01-01"
+    expiry_date: "2027-01-01"
+    min_tenure_months: 0
+    priority: 4
+    terms_text: "Free 3 GB data add-on valid for 30 days"
+
+  # ── Autopay incentive (payment_reminder) ──────────────────
+
+  - offer_id: OFR-APP-1GB
+    name: "Autopay sign-up 1 GB bonus"
+    description: "1 GB data for enabling autopay"
+    eligible_segments: [payment_reminder]
+    plan_type: postpaid
+    channel: any
+    valid_from: "2026-01-01"
+    expiry_date: "2027-01-01"
+    min_tenure_months: 0
+    priority: 1
+    terms_text: "Enable autopay and receive 1 GB bonus data within 24 hours"

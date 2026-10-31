@@ -25,6 +25,7 @@ export default function QueuePage() {
   const { data, error, loading, reload } = useAsync(() => api.getQueue());
   const [filter, setFilter] = useState<SegmentKey | 'all'>('all');
   const [query, setQuery] = useState('');
+  const [progress, setProgress] = useState<string | null>(null); // batch drafting status
 
   const rows = useMemo(() => {
     if (!data) return [];
@@ -48,8 +49,25 @@ export default function QueuePage() {
             <span className="sr-only">Search customers</span>
             <input type="search" placeholder="Search by customer ID" value={query} onChange={(e) => setQuery(e.target.value)} />
           </label>
-          <button type="button" className="btn btn-primary" onClick={() => api.generate().then(reload).catch(alert)}>
-            Classify new batch
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={progress !== null}
+            onClick={() => {
+              setProgress('Starting…');
+              api
+                .generate((done, left) => {
+                  setProgress(`Drafted ${done} · ${left} left`);
+                  reload();
+                })
+                .catch(alert)
+                .finally(() => {
+                  setProgress(null);
+                  reload();
+                });
+            }}
+          >
+            {progress ?? 'Classify new batch'}
           </button>
         </div>
       </header>

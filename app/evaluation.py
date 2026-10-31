@@ -7,6 +7,7 @@ import re
 from functools import lru_cache
 
 from app import db, engage, policy
+from app.domain import engage as D
 
 
 @lru_cache(maxsize=1)
@@ -16,8 +17,9 @@ def _answer_key() -> dict:
     per = collections.Counter()
     cm = collections.Counter()
     blocked = refused = 0
+    pre = D.preload()   # 5 queries instead of ~5 per customer
     for cid, g in key.items():
-        d = engage.decide(cid)
+        d = engage.decide(cid, pre=pre)
         mm = gt.mismatches(d, g)
         for k in gt.FIELDS:
             per[k] += k not in mm

@@ -16,15 +16,18 @@ _pool: ConnectionPool | None = None
 def _get_pool() -> ConnectionPool:
     global _pool
     if _pool is None:
-        # prepare_threshold=None: required behind Supabase's transaction pooler (port 6543)
-        _pool = ConnectionPool(config.DATABASE_URL, min_size=1, max_size=5, open=True,
-                               kwargs={"row_factory": dict_row, "prepare_threshold": None})
+        # prepare_threshold=None: required behind Supabase's transaction pooler (port 6543).
+        # autocommit: a read is one round trip instead of BEGIN + query + COMMIT (~3x faster to a remote DB);
+        # conn() still opens a real transaction for multi-statement writes.
+        _pool = ConnectionPool(config.DATABASE_URL, min_size=2, max_size=10, open=True,
+                               kwargs={"row_factory": dict_row, "prepare_threshold": None, "autocommit": True})
     return _pool
 
 
 @contextmanager
 def conn():
-    with _get_pool().connection() as c:  # commits on success, rolls back on error
+    """One transaction: commits on success, rolls back on error."""
+    with _get_pool().connection() as c, c.transaction():
         yield c
 
 
@@ -55,7 +58,7 @@ def reset() -> None:
 
 
 def q(sql: str, params: tuple | dict = ()) -> list[dict]:
-    with conn() as c:
+    with _get_pool().connection() as c:   # single statement: autocommit, no transaction round trips
         cur = c.execute(*_pg(sql, params))
         return cur.fetchall() if cur.description else []
 
@@ -66,7 +69,7 @@ def q1(sql: str, params: tuple | dict = ()) -> dict | None:
 
 
 def execute(sql: str, params: tuple | dict = ()) -> int:
-    with conn() as c:
+    with _get_pool().connection() as c:
         return c.execute(*_pg(sql, params)).rowcount
 
 

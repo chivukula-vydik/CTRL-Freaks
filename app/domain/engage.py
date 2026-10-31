@@ -34,15 +34,40 @@ def _seg() -> dict:
 
 
 # ---------------------------------------------------------------- step 1: context ----------------------------
-def context(cid: str, as_of: date | None = None) -> dict | None:
-    c = db.q1(f"SELECT {', '.join(CUSTOMER_COLS)} FROM customers WHERE customer_id = ?", (cid,))
+HIST_COLS = "message_id, sent_at, channel, message_type, segment, offer_id, bill_id"
+
+
+def preload() -> dict:
+    """Every customer's rows in five queries, for whole-dataset runs (evaluation). Same columns and order as
+    context() reads one customer at a time."""
+    def by(rows):
+        out: dict[str, list] = {}
+        for r in rows:
+            out.setdefault(r["customer_id"], []).append(r)
+        return out
+    return {
+        "customers": {r["customer_id"]: r for r in db.q(f"SELECT {', '.join(CUSTOMER_COLS)} FROM customers")},
+        "consent": {r["customer_id"]: r for r in db.q("SELECT * FROM consent")},
+        "billing": by(db.q("SELECT * FROM billing ORDER BY customer_id, due_date, bill_id")),
+        "history": by(db.q(f"SELECT customer_id, {HIST_COLS} FROM contact_history ORDER BY customer_id, sent_at DESC")),
+        "offers": db.q("SELECT * FROM offer_catalog ORDER BY priority, offer_id"),
+    }
+
+
+def context(cid: str, as_of: date | None = None, pre: dict | None = None) -> dict | None:
+    if pre is not None:
+        c = pre["customers"].get(cid)
+        cons = dict(pre["consent"].get(cid) or {})
+        bills = [dict(b) for b in pre["billing"].get(cid, [])]
+        hist = [{k: h[k] for k in h if k != "customer_id"} for h in pre["history"].get(cid, [])]
+    else:
+        c = db.q1(f"SELECT {', '.join(CUSTOMER_COLS)} FROM customers WHERE customer_id = ?", (cid,))
+        cons = (db.q1("SELECT * FROM consent WHERE customer_id = ?", (cid,)) or {}) if c else {}
+        bills = db.q("SELECT * FROM billing WHERE customer_id = ? ORDER BY due_date, bill_id", (cid,)) if c else []
+        hist = db.q(f"SELECT {HIST_COLS} FROM contact_history WHERE customer_id = ? ORDER BY sent_at DESC", (cid,)) if c else []
     if not c:
         return None
     snap = as_of or c["snapshot_date"]
-    cons = db.q1("SELECT * FROM consent WHERE customer_id = ?", (cid,)) or {}
-    bills = db.q("SELECT * FROM billing WHERE customer_id = ? ORDER BY due_date, bill_id", (cid,))
-    hist = db.q("SELECT message_id, sent_at, channel, message_type, segment, offer_id, bill_id "
-                "FROM contact_history WHERE customer_id = ? ORDER BY sent_at DESC", (cid,))
     within = _seg()["thresholds"]["reminder_window_days"]
     for b in bills:
         b["outstanding"] = max(_d(b["amount_due"]) - _d(b["amount_paid"]), Decimal("0"))
@@ -57,7 +82,7 @@ def context(cid: str, as_of: date | None = None) -> dict | None:
         "reminder_bills": reminder, "target": target,
         "total_outstanding": sum((b["outstanding"] for b in reminder), Decimal("0")),
         "days_since_contact": (snap - hist[0]["sent_at"]).days if hist else None,
-        "days_since_type": {},
+        "days_since_type": {}, "offers": pre["offers"] if pre is not None else None,
     }
     for h in hist:   # newest first
         ctx["days_since_type"].setdefault(h["message_type"], (snap - h["sent_at"]).days)
@@ -231,7 +256,12 @@ def select_offer(ctx: dict, strat: dict, seg: dict) -> tuple[dict | None, list[d
         return None, []
     ids = {g["name"].split("_")[0]: g["id"] for g in policy.offer_rules()["gates"]}
     chosen, decisions = None, []
-    for o in db.q("SELECT * FROM offer_catalog WHERE message_type = ? ORDER BY priority, offer_id", (strat["message_type"],)):
+    if ctx.get("offers") is not None:   # preloaded (same order as the query below)
+        offers = [o for o in ctx["offers"] if o["message_type"] == strat["message_type"]]
+    else:
+        offers = db.q("SELECT * FROM offer_catalog WHERE message_type = ? ORDER BY priority, offer_id",
+                      (strat["message_type"],))
+    for o in offers:
         g = offer_gates(ctx, o, seg["primary"])
         failed = [k for k, ok in g.items() if not ok]
         decisions.append({"offer_id": o["offer_id"], "eligible": not failed, "reasons": failed,
@@ -357,6 +387,9 @@ CREATE TABLE IF NOT EXISTS drafts (
 CREATE TABLE IF NOT EXISTS outbox (
   message_id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, customer_id TEXT NOT NULL, to_email_masked TEXT,
   subject TEXT NOT NULL, body TEXT NOT NULL, queued_at TEXT NOT NULL, status TEXT NOT NULL);
+-- tables created by the first version lack these columns (additive, no data touched)
+ALTER TABLE drafts ADD COLUMN IF NOT EXISTS draft_source TEXT;
+ALTER TABLE outbox ADD COLUMN IF NOT EXISTS to_email_masked TEXT;
 """
     TEMPLATE_VERSION = "ai-v2"
     SYSTEM_NAME = "Customer and Billing System"

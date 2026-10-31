@@ -118,18 +118,20 @@ export function toChecks(c: Checks | null): ValidationCheck[] {
 
 const STATUS: Record<string, QueueStatus> = { pending_review: 'ready', blocked: 'blocked', approved: 'approved', sent: 'approved', rejected: 'rejected' };
 
-/** Latest draft per customer, full detail. */
+/** Latest draft per customer, full detail, in one request. */
 async function latestDrafts(): Promise<Draft[]> {
-  const list = await call<{ draft_id: string; customer_id: string }[]>('/drafts'); // newest first
+  const list = await call<Draft[]>('/drafts?full=true'); // newest first
   const seen = new Set<string>();
-  const latest = list.filter((d) => !seen.has(d.customer_id) && !!seen.add(d.customer_id));
-  return Promise.all(latest.map((d) => call<Draft>(`/drafts/${d.draft_id}`)));
+  return list.filter((d) => !seen.has(d.customer_id) && !!seen.add(d.customer_id));
 }
 async function draftFor(customerId: string): Promise<Draft | null> {
-  const list = await call<{ draft_id: string; customer_id: string }[]>('/drafts');
-  const hit = list.find((d) => d.customer_id === customerId.toUpperCase());
-  return hit ? call<Draft>(`/drafts/${hit.draft_id}`) : null;
+  const list = await call<Draft[]>(`/drafts?full=true&customer_id=${encodeURIComponent(customerId)}`);
+  return list[0] ?? null;
 }
+
+// the queue page and the sidebar badge ask at the same moment: share one request for a few seconds
+let queueCache: { at: number; p: Promise<{ summary: QueueSummary; items: QueueItem[] }> } | null = null;
+const invalidate = () => { queueCache = null; };
 
 function toQueueItem(d: Draft): QueueItem {
   const checks = toChecks(d.checks);
@@ -151,7 +153,15 @@ function toQueueItem(d: Draft): QueueItem {
   };
 }
 
-export async function getQueue(): Promise<{ summary: QueueSummary; items: QueueItem[] }> {
+export function getQueue(): Promise<{ summary: QueueSummary; items: QueueItem[] }> {
+  if (!queueCache || Date.now() - queueCache.at > 3000) {
+    queueCache = { at: Date.now(), p: loadQueue() };
+    queueCache.p.catch(invalidate);
+  }
+  return queueCache.p;
+}
+
+async function loadQueue(): Promise<{ summary: QueueSummary; items: QueueItem[] }> {
   const [drafts, pol] = await Promise.all([latestDrafts(), policyOnce()]);
   const items = drafts.map(toQueueItem);
   const count = (...s: QueueStatus[]) => items.filter((i) => s.includes(i.status)).length;
@@ -250,6 +260,7 @@ export async function revalidate(id: string, subject: string, body: string): Pro
   const d = await draftFor(id);
   if (!d) throw new Error('draft not found');
   const r = await call<{ checks: Checks }>(`/drafts/${d.draft_id}/edit`, post({ subject, body }));
+  invalidate();
   return toChecks(r.checks);
 }
 
@@ -259,6 +270,7 @@ export async function submitDecision(x: {
 }): Promise<DecisionResult> {
   const d = await draftFor(x.customerId);
   if (!d) throw new Error('draft not found');
+  invalidate();
   const note = x.feedback + (x.feedback ? ' ' : '') + `[rubric ${JSON.stringify(x.rubric)}]`;
   const base = `/drafts/${d.draft_id}`;
   if (x.action === 'reject') {
@@ -280,11 +292,21 @@ export async function escalate(id: string): Promise<{ ticketId: string }> {
   const d = await draftFor(id);
   if (!d) throw new Error('draft not found');
   await call(`/drafts/${d.draft_id}/reject`, post({ note: 'Escalated to Billing Ops' }));
+  invalidate();
   return { ticketId: d.draft_id };
 }
 
-export async function generate(): Promise<void> {
-  await call('/engage/batch', post({}));
+/** Draft every customer that has none yet, a chunk at a time (the server runs each chunk in parallel),
+ *  so the queue fills in as it goes and no single request runs for minutes. */
+export async function generate(onChunk?: (done: number, remaining: number) => void): Promise<void> {
+  let done = 0;
+  for (;;) {
+    const r = await call<{ results: unknown[]; remaining: number }>('/engage/batch', post({ limit: 8 }));
+    done += r.results.length;
+    invalidate();
+    onChunk?.(done, r.remaining);
+    if (!r.remaining || !r.results.length) return;
+  }
 }
 
 // ---------------------------------------------------------------- policy, evaluation, audit ---

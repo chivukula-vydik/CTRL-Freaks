@@ -1,0 +1,70 @@
+# ──────────────────────────────────────────────────────────────
+# UC5 — Data Conflict Detection Rules
+# Part of pre-check gate (step 3), block reason: data_conflict
+# Aligned to: generate_dataset.py data_conflicts()
+# ──────────────────────────────────────────────────────────────
+
+description: >
+  Each check identifies a contradiction in the customer's data.
+  If ANY check triggers, the customer is blocked with reason
+  data_conflict. All triggered codes are recorded in
+  expected_data_conflicts for audit.
+
+checks:
+
+  - code: PAID_AMOUNT_MISMATCH
+    description: "Bill marked 'paid' but amount_paid != amount_due"
+    condition: "bill_status == 'paid' AND amount_paid != amount_due"
+    table: billing
+
+  - code: PAID_NO_PAYMENT_DATE
+    description: "Bill marked 'paid' but last_payment_date is empty"
+    condition: "bill_status == 'paid' AND last_payment_date IS NULL"
+    table: billing
+
+  - code: UNPAID_BUT_FULLY_PAID
+    description: "Bill is due/overdue but amount_paid >= amount_due"
+    condition: "bill_status IN ('due', 'overdue') AND amount_paid >= amount_due"
+    table: billing
+
+  - code: STATUS_DATE_MISMATCH
+    description: >
+      Overdue bill with due_date on or after snapshot (should be 'due'),
+      or due bill with due_date before snapshot (should be 'overdue').
+    condition: |
+      (bill_status == 'overdue' AND due_date >= snapshot_date)
+      OR (bill_status == 'due' AND due_date < snapshot_date)
+    table: billing
+
+  - code: MISSING_CURRENCY
+    description: "Bill has an empty currency field"
+    condition: "currency IS NULL OR currency == ''"
+    table: billing
+
+  - code: ACTIVITY_MISMATCH
+    description: "Customer inactive for 30+ days but has activity in the last 30 days"
+    condition: "last_activity_days >= 30 AND activity_30d > 0"
+    table: customers
+
+  - code: TIER_MISMATCH
+    description: >
+      loyalty_tier does not match the tier derived from loyalty_points.
+      Silver: 0-1999, Gold: 2000-7999, Platinum: 8000+
+    condition: "loyalty_tier != tier_for(loyalty_points)"
+    table: customers
+
+  - code: PAYMENT_COUNT_MISMATCH
+    description: >
+      For postpaid customers: bills_issued_last_12 != actual bill count,
+      or on_time_payments_last_12 != actual on-time payment count.
+    condition: |
+      plan_type == 'postpaid' AND (
+        bills_issued_last_12 != COUNT(billing rows)
+        OR on_time_payments_last_12 != COUNT(paid bills WHERE last_payment_date <= due_date)
+      )
+    table: customers + billing
+
+  - code: FUTURE_CONSENT_DATE
+    description: "consent_updated_at is after the snapshot date"
+    condition: "consent_updated_at > snapshot_date"
+    table: consent

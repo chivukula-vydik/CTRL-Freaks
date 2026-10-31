@@ -37,4 +37,5 @@ LLM_MODEL = os.getenv("LLM_MODEL", "")   # empty: config/ai_prompt.yaml model.mo
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
 MOCK_LLM = _b("MOCK_LLM")
 
+BATCH_WORKERS = int(os.getenv("BATCH_WORKERS", "4"))   # customers drafted in parallel by /engage/batch
 ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()   # empty = every staff endpoint refuses (require_admin)

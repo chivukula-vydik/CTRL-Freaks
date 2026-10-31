@@ -43,6 +43,12 @@ def test_all_222_customers_match_the_answer_key():
     assert not bad, f"{len(bad)} customers differ from ground_truth.csv, first: {list(bad.items())[:3]}"
 
 
+def test_preloaded_run_decides_exactly_like_per_customer_queries():
+    pre = D.preload()
+    for cid in GT:
+        assert gt.got(engage.decide(cid, pre=pre)) == gt.got(engage.decide(cid)), cid
+
+
 def test_protected_fields_are_never_read():
     prot = set(policy.policy()["message"]["pii_fields_to_drop"])
     assert not prot & set(D.CUSTOMER_COLS)
@@ -256,6 +262,17 @@ def test_send_is_one_transaction(client):
         client.post(f"/drafts/{did}/send", headers=H)
     assert db.q("SELECT * FROM outbox") == []
     assert db.q1("SELECT status FROM drafts WHERE draft_id = ?", (did,))["status"] == "approved"
+
+
+def test_full_draft_list_and_chunked_batch(client):
+    b = client.post("/engage/batch", json={"limit": 3}, headers=H).json()
+    assert len(b["results"]) == 3 and b["remaining"] == len(GT) - 3
+    full = client.get("/drafts?full=true", headers=H).json()
+    assert len(full) == 3 and all(d["draft"] and "facts" in d and "checks" in d for d in full)
+    one = client.get(f"/drafts?full=true&customer_id={full[0]['customer_id'].lower()}", headers=H).json()
+    assert [d["draft_id"] for d in one] == [full[0]["draft_id"]] and one[0] == client.get(f"/drafts/{one[0]['draft_id']}", headers=H).json()
+    nxt = client.post("/engage/batch", json={"limit": 3}, headers=H).json()
+    assert not {r["customer_id"] for r in nxt["results"]} & {r["customer_id"] for r in b["results"]}
 
 
 def test_staff_only(client):

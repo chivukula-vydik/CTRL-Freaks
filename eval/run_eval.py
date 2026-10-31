@@ -26,8 +26,9 @@ def main() -> int:
     fails = collections.defaultdict(list)
     seg_cm, block_cm = collections.Counter(), collections.Counter()
     drafted = grounded = ai = fallback = 0
+    pre = D.preload()
     for cid, g in key.items():
-        d = engage.decide(cid)
+        d = engage.decide(cid, pre=pre)
         exp, got = gt.expected(g), gt.got(d)
         mm = gt.mismatches(d, g)
         for k in gt.FIELDS:

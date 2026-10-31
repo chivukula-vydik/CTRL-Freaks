@@ -1,6 +1,7 @@
 """FastAPI surface. Endpoint paths and fields follow the HCL contract; rename here if the day's doc differs."""
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -94,21 +95,32 @@ def engage_one(req: engage.EngageRequest):
 
 @app.post("/engage/batch", dependencies=[Depends(require_admin)])
 def engage_batch(req: engage.BatchRequest):
-    ids = req.customer_ids or [r["customer_id"] for r in db.q("SELECT customer_id FROM customers ORDER BY customer_id")]
-    out = []
-    for cid in ids:
+    """Customers run in parallel (BATCH_WORKERS): the AI call dominates and they are independent.
+    With limit, only the next customers without a draft run, and `remaining` tells the console to continue."""
+    remaining = 0
+    if req.customer_ids:
+        ids = req.customer_ids
+    elif req.limit:
+        ids, remaining = engage.undrafted(max(1, min(req.limit, 50)))
+    else:
+        ids = [r["customer_id"] for r in db.q("SELECT customer_id FROM customers ORDER BY customer_id")]
+
+    def one(cid: str) -> dict:
         try:
             r = engage.run(cid, req.as_of_date)
-            out.append({k: r[k] for k in ("customer_id", "draft_id", "status", "primary_segment", "confidence")}
-                       | {"blocking": [b["code"] for b in r["checks"]["blocking"]]})
+            return ({k: r[k] for k in ("customer_id", "draft_id", "status", "primary_segment", "confidence")}
+                    | {"blocking": [b["code"] for b in r["checks"]["blocking"]]})
         except engage.Refused as e:
-            out.append({"customer_id": cid, "status": "error", "detail": e.msg})
-    return {"results": out}
+            return {"customer_id": cid, "status": "error", "detail": e.msg}
+
+    with ThreadPoolExecutor(max_workers=config.BATCH_WORKERS) as pool:
+        out = list(pool.map(one, ids))
+    return {"results": out, "remaining": remaining}
 
 
 @app.get("/drafts", dependencies=[Depends(require_admin)])
-def drafts(status: str | None = None):
-    return engage.list_drafts(status)
+def drafts(status: str | None = None, customer_id: str | None = None, full: bool = False):
+    return engage.list_drafts(status, customer_id, full)
 
 
 @app.get("/drafts/{draft_id}", dependencies=[Depends(require_admin)])

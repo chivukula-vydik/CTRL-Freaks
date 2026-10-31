@@ -1,0 +1,169 @@
+# ──────────────────────────────────────────────────────────────
+# UC5 — AI Draft Writer Configuration (Step 6)
+# Replaces Jinja2 templates. Claude API generates the full email
+# using context from steps 1–5 and the rules below.
+# ──────────────────────────────────────────────────────────────
+
+model:
+  provider: anthropic
+  model_id: claude-sonnet-4-20250514
+  temperature: 0.3                   # low for consistency
+  max_tokens: 512
+  fallback_on_error: true            # use rule-based fallback if API fails
+
+# ─── System prompt (constant across all drafts) ─────────────
+system_prompt: |
+  You are a customer communications assistant for a telecom company.
+  You generate personalized email messages for customers based on
+  their segment, strategy, tone, and available offer.
+
+  STRICT RULES:
+  1. Output ONLY the email body text. No subject line, no metadata.
+  2. Use the EXACT locked placeholders as literal tokens in your output:
+     {first_name}, {amount}, {due_date}, {offer_terms}, {loyalty_points}, {plan_name}
+     Do NOT resolve these — they will be replaced downstream.
+  3. NEVER invent currency amounts, dates, data quantities, or point values.
+     All numerical details must come through placeholders only.
+  4. Start with a greeting using {first_name} (fallback: "Customer").
+  5. End with a professional sign-off and "Customer Care Team".
+  6. Keep the message between 50-800 characters, max 8 sentences.
+  7. Match the assigned TONE exactly.
+  8. Include the offer ONLY if offer_terms is provided; wrap it naturally.
+  9. NEVER include PII (phone, Aadhaar, PAN, address, credit score, DOB, gender).
+  10. Write in English regardless of customer's preferred_language.
+
+# ─── User prompt template (filled per customer) ─────────────
+user_prompt_template: |
+  Generate an email for this customer:
+
+  CUSTOMER CONTEXT:
+  - Name: {first_name}
+  - Plan: {plan_name}
+  - Segment: {segment}
+  - Loyalty points: {loyalty_points}
+
+  MESSAGE PARAMETERS:
+  - Message type: {message_type}
+  - Strategy: {strategy}
+  - Tone: {tone}
+  - Greeting name: {greeting_name}
+
+  {payment_context}
+
+  {offer_context}
+
+  Write the email body now. Use locked placeholders as literal tokens.
+
+# ─── Tone instructions (injected based on strategy) ─────────
+tone_instructions:
+
+  warm:
+    description: "Friendly, appreciative — for consistent customers"
+    guidance: |
+      Express genuine appreciation for their loyalty. Mention their
+      plan and points naturally. Keep it conversational and positive.
+      No urgency, no action required unless offering something.
+
+  celebratory:
+    description: "Upbeat, rewarding — for loyalty candidates"
+    guidance: |
+      Celebrate their status as a valued long-term customer. Highlight
+      their loyalty tier and points. Frame any offer as a well-deserved
+      reward. Enthusiastic but professional.
+
+  helpful:
+    description: "Supportive, solution-oriented — for declining activity"
+    guidance: |
+      Acknowledge you have noticed reduced engagement without being
+      accusatory. Offer help and express interest in what they need.
+      Frame any offer as a way to enhance their experience.
+
+  win-back:
+    description: "Empathetic, welcoming — for dormant customers"
+    guidance: |
+      Gently note they have been away. Express that they are missed.
+      Make it easy to come back — no pressure. Frame any offer as
+      a welcome-back gesture.
+
+  courteous:
+    description: "Polite, informative — for upcoming payment reminders"
+    guidance: |
+      Friendly reminder about an upcoming or just-due payment.
+      Mention {amount} and {due_date} via placeholders. No pressure,
+      no threat. Offer help if they have questions.
+
+  polite:
+    description: "Professional, clear — for early overdue (1-15 days)"
+    guidance: |
+      Acknowledge the payment is overdue. State facts clearly via
+      {amount} and {due_date} placeholders. Offer payment options.
+      Supportive but direct.
+
+  firm:
+    description: "Direct, serious — for mid overdue (16-30 days)"
+    guidance: |
+      Clear statement that payment is significantly overdue. Mention
+      potential service implications. Urge prompt action. Still
+      professional — no threats, but convey importance.
+
+  urgent:
+    description: "Serious, final — for late overdue (31+ days)"
+    guidance: |
+      Final notice tone. State this is an urgent matter requiring
+      immediate attention. Mention service impact is imminent.
+      Provide payment contact. Professional but unmistakably serious.
+
+# ─── Payment context block (injected for payment_reminder) ──
+payment_context_template: |
+  PAYMENT DETAILS:
+  - Target bill: {target_bill_id}
+  - Amount outstanding: {amount} (use as placeholder)
+  - Due date: {due_date} (use as placeholder)
+  - Overdue days: {overdue_days}
+  - Stage: {strategy}
+  - Total outstanding (all qualifying bills): {total_outstanding}
+
+# ─── Offer context block (injected when offer selected) ─────
+offer_context_template: |
+  OFFER TO INCLUDE:
+  - Offer ID: {offer_id}
+  - Description: {offer_description}
+  - Include this as: {offer_terms} (use as placeholder)
+  - Weave the offer naturally into the message body.
+
+no_offer_instruction: |
+  NO OFFER AVAILABLE:
+  Do not mention any offers, discounts, or promotions.
+  Do not use the {offer_terms} placeholder.
+
+# ─── Fallback (if Claude API fails) ─────────────────────────
+fallback:
+  mode: rule_based
+  description: >
+    If the API call fails after retry, generate a minimal
+    rule-based message using string concatenation:
+    greeting + segment-appropriate body + sign-off.
+  max_retries: 2
+  retry_delay_ms: 1000
+
+  templates:
+    appreciation: >
+      Hi {first_name}, thank you for being a valued {plan_name}
+      customer. You have {loyalty_points} loyalty points.
+      Best regards, Customer Care Team
+    reward_offer: >
+      Hi {first_name}, as a valued {plan_name} customer with
+      {loyalty_points} loyalty points, we have something special
+      for you: {offer_terms}. Best regards, Customer Care Team
+    reengagement_offer: >
+      Hi {first_name}, we have noticed some changes in your
+      {plan_name} activity and wanted to check in. {offer_terms}.
+      Warm regards, Customer Care Team
+    payment_reminder: >
+      Hi {first_name}, this is a friendly reminder that your
+      payment of {amount} is due on {due_date}. Please ensure
+      timely payment. Best regards, Customer Care Team
+    overdue_notice: >
+      Hi {first_name}, your payment of {amount} was due on
+      {due_date} and remains outstanding. Please make your payment
+      at your earliest convenience. Regards, Customer Care Team

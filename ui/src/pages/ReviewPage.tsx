@@ -64,6 +64,8 @@ export default function ReviewPage() {
     setRevalidating(true);
     try {
       setChecks(await api.revalidate(customerId, subject, body));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e)); // e.g. 409: draft no longer editable
     } finally {
       setRevalidating(false);
     }
@@ -81,6 +83,9 @@ export default function ReviewPage() {
         feedback,
       });
       setDecision({ action, result });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e)); // e.g. 409: checks no longer pass at approval
+      reload();
     } finally {
       setSubmitting(false);
     }

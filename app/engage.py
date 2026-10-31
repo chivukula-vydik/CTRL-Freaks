@@ -21,6 +21,7 @@ class EngageRequest(BaseModel):
 class BatchRequest(BaseModel):
     customer_ids: list[str] | None = None
     as_of_date: date | None = None
+    limit: int | None = None      # draft the next N customers that have no draft yet (the console works in chunks)
 
 
 class EditRequest(BaseModel):
@@ -92,9 +93,10 @@ def audit_recent(limit: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------- steps 1 to 5 --------------------------------
-def decide(cid: str, as_of: date | None = None) -> dict:
-    """Deterministic part of the pipeline. No AI, writes nothing. The eval and the tests call this."""
-    ctx = D.context(cid.strip().upper(), as_of)
+def decide(cid: str, as_of: date | None = None, pre: dict | None = None) -> dict:
+    """Deterministic part of the pipeline. No AI, writes nothing. The eval and the tests call this.
+    pre = D.preload() for whole-dataset runs (no per-customer queries)."""
+    ctx = D.context(cid.strip().upper(), as_of, pre)
     if ctx is None:
         raise Refused(404, "customer not found")
     seg = D.classify(ctx)
@@ -248,18 +250,20 @@ def run(cid: str, as_of: date | None = None) -> dict:
 
 
 # ---------------------------------------------------------------- read -------------------------------------------
-def _load(did: str) -> dict:
-    row = db.q1("SELECT * FROM drafts WHERE draft_id = ?", (did,))
-    if not row:
-        raise Refused(404, "draft not found")
+def _parse(row: dict) -> dict:
     for k in ("segments", "strategy", "facts", "checks"):
         row[k] = json.loads(row[k]) if row[k] else None
     return row
 
 
-def get(did: str) -> dict:
-    row = _load(did)
-    offer = db.q1("SELECT * FROM offer_catalog WHERE offer_id = ?", (row["offer_id"],)) if row["offer_id"] else None
+def _load(did: str) -> dict:
+    row = db.q1("SELECT * FROM drafts WHERE draft_id = ?", (did,))
+    if not row:
+        raise Refused(404, "draft not found")
+    return _parse(row)
+
+
+def _view(row: dict, offer: dict | None) -> dict:
     seg = row["segments"] or {}
     return {**row, "as_of_date": row["as_of"], "draft": {"subject": row["subject"], "body": row["body"]},
             "primary_segment": seg.get("primary"), "confidence": seg.get("confidence"),
@@ -267,9 +271,34 @@ def get(did: str) -> dict:
             "human_review_required": bool((row["strategy"] or {}).get("human_review_required"))}
 
 
-def list_drafts(status: str | None = None) -> list[dict]:
-    sql = "SELECT draft_id, customer_id, status, subject, updated_at FROM drafts"
-    return db.q(sql + (" WHERE status = ?" if status else "") + " ORDER BY created_at DESC", (status,) if status else ())
+def get(did: str) -> dict:
+    row = _load(did)
+    offer = db.q1("SELECT * FROM offer_catalog WHERE offer_id = ?", (row["offer_id"],)) if row["offer_id"] else None
+    return _view(row, offer)
+
+
+def list_drafts(status: str | None = None, customer_id: str | None = None, full: bool = False) -> list[dict]:
+    """Newest first. full=True returns every draft in the same shape as get(), in two queries (no N+1)."""
+    where, params = [], []
+    if status:
+        where.append("status = ?"); params.append(status)
+    if customer_id:
+        where.append("customer_id = ?"); params.append(customer_id.strip().upper())
+    cols = "*" if full else "draft_id, customer_id, status, subject, updated_at"
+    rows = db.q(f"SELECT {cols} FROM drafts" + (" WHERE " + " AND ".join(where) if where else "")
+                + " ORDER BY created_at DESC", tuple(params))
+    if not full:
+        return rows
+    offers = {o["offer_id"]: o for o in db.q("SELECT * FROM offer_catalog")}
+    return [_view(_parse(r), offers.get(r["offer_id"])) for r in rows]
+
+
+def undrafted(limit: int) -> tuple[list[str], int]:
+    """The next customers that have no draft yet, and how many are left after them."""
+    rows = db.q("SELECT customer_id FROM customers WHERE customer_id NOT IN (SELECT customer_id FROM drafts) "
+                "ORDER BY customer_id")
+    ids = [r["customer_id"] for r in rows]
+    return ids[:limit], max(len(ids) - limit, 0)
 
 
 # ---------------------------------------------------------------- re-run gates -----------------------------------
