@@ -1,0 +1,9 @@
+offer_id,offer_name,message_type,eligible_segments,plan_type,min_tenure_months,channel,value,value_unit,terms,valid_from,expiry_date,priority
+OFR-RWD-SMS,Loyalty SMS bonus,reward_offer,loyalty_candidate,any,12,sms,200,loyalty_points,Credited within 48 hours.,2026-09-01,2026-12-31,1
+OFR-RWD-500,Loyalty bill credit,reward_offer,loyalty_candidate,postpaid,36,email,100.00,INR_bill_credit,Applied to next bill. One per account.,2026-10-01,2026-12-31,2
+OFR-RWD-2GB,Loyalty data gift,reward_offer,loyalty_candidate,any,24,email,2,GB_data_30d,Valid 30 days from activation.,2026-07-01,2026-11-30,3
+OFR-REE-EXP,Come-back data pack (expired),reengagement_offer,declining_activity|dormant,any,0,email,5,GB_data_7d,Valid 7 days from activation.,2026-07-01,2026-10-20,1
+OFR-REE-FUT,Festive re-engagement (not yet live),reengagement_offer,declining_activity,any,0,email,10,GB_data_7d,Valid 7 days from activation.,2026-11-15,2026-12-31,2
+OFR-REE-PRE,Prepaid recharge cashback,reengagement_offer,dormant,prepaid,0,email,50.00,INR_cashback,On next recharge of 199 or more.,2026-08-01,2026-11-30,3
+OFR-REE-3GB,Re-engagement data pack,reengagement_offer,declining_activity|dormant,any,3,email,3,GB_data_7d,Valid 7 days from activation.,2026-07-01,2026-12-15,4
+OFR-APP-1GB,Thank-you data,appreciation,consistent,any,6,email,1,GB_data_30d,Valid 30 days from activation.,2026-07-01,2026-12-31,1

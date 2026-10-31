@@ -1,8 +1,8 @@
-"""Active domain, picked by env DOMAIN (default: generic).
+"""Active domain, picked by env DOMAIN (default: engage).
 
-Lookup order: app/domain/<name>.py, then examples/<name>/domain.py.
+Lookup: app/domain/<name>.py.
 Its data pack (docs, source_register.csv, csv/, eval_set.jsonl) is data/<name>/,
-else examples/<name>/data/ ; override with PACK_DIR.
+; override with PACK_DIR.
 """
 import importlib
 import os
@@ -11,23 +11,23 @@ from pathlib import Path
 from app.config import ROOT
 from app.domain.base import COMMON_OUT_OF_SCOPE, Ctx, Domain, ToolResult, Understanding, action, tool  # noqa: F401
 
-NAME = os.getenv("DOMAIN", "generic")
+NAME = os.getenv("DOMAIN", "engage")
 
 
 def _load(name: str) -> Domain:
-    for mod in (f"app.domain.{name}", f"examples.{name}.domain"):
+    for mod in (f"app.domain.{name}",):
         try:
             return importlib.import_module(mod).DOMAIN
         except ModuleNotFoundError as e:
             if e.name not in (mod, mod.rsplit(".", 1)[0]):
                 raise
-    raise SystemExit(f"DOMAIN={name}: no app/domain/{name}.py or examples/{name}/domain.py")
+    raise SystemExit(f"DOMAIN={name}: no app/domain/{name}.py")
 
 
 def pack_dir() -> Path:
     if os.getenv("PACK_DIR"):
         return Path(os.environ["PACK_DIR"])
-    for p in (ROOT / "data" / NAME, ROOT / "examples" / NAME / "data"):
+    for p in (ROOT / "data" / NAME,):
         if p.exists():
             return p
     return ROOT / "data" / NAME

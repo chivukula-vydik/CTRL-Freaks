@@ -1,2 +1,0 @@
-{"doc": "sample_001.txt", "party_name": "Sample Party One", "reference_id": "ABC-1234", "doc_date": "2024-02-14", "category": "Type A", "total_amount": 1840000, "secondary_amount": 2500000}
-{"doc": "sample_002.txt", "party_name": "Sample Party Two", "reference_id": "XYZ-9876", "doc_date": "2024-03-03", "category": "Type B", "total_amount": 1200000, "secondary_amount": null}

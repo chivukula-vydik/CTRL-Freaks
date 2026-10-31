@@ -27,27 +27,12 @@ DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
 
 # Supabase Postgres. On Vercel use the transaction pooler URI (port 6543)
 DATABASE_URL = os.getenv("DATABASE_URL", "")
-# Qdrant Cloud URL, or ":memory:" for tests / offline eval
-QDRANT_URL = os.getenv("QDRANT_URL", ":memory:")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
-COLLECTION = os.getenv("QDRANT_COLLECTION", "docs")
-
 # LLM + embeddings: any OpenAI-compatible endpoint, Gemini by default
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
 LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("GEMINI_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-flash-latest")
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
 MOCK_LLM = _b("MOCK_LLM")
-# "api" = LLM_BASE_URL /embeddings, "hash" = offline fallback for tests
-EMBED_BACKEND = os.getenv("EMBED_BACKEND", "api")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "gemini-embedding-001")
-
-# Retrieval
-TOP_K = int(os.getenv("TOP_K", "6"))
-CHUNK_CHARS = int(os.getenv("CHUNK_CHARS", "900"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
-# below this fused relevance the system abstains (not_found). Tune with eval/run_eval.py
-MIN_RELEVANCE = float(os.getenv("MIN_RELEVANCE", "0.30"))
 
 ADMIN_KEY = os.getenv("ADMIN_KEY", "").strip()
 if not ADMIN_KEY:  # no default: a key in the repo would be a public admin key on Vercel
